@@ -1,0 +1,1021 @@
+import { api, cached, session, DEMO, NetworkError } from './api.js';
+import { pickFile, readFile, openBase64, pushState, enablePush, refreshPush, isIOS, isStandalone } from './media.js';
+
+// ═════════ DOM ═════════
+function h(tag, attrs = {}, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === false || v == null) continue;
+    if (k === 'class') el.className = v;
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(), v);
+    else if (k === 'html') el.innerHTML = v;
+    else if (k === 'value') el.value = v;
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of children.flat(Infinity)) {
+    if (c == null || c === false) continue;
+    el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  }
+  return el;
+}
+function fill(el, ...children) {
+  el.replaceChildren(...children.flat(Infinity).filter(c => c != null && c !== false).map(c => c instanceof Node ? c : document.createTextNode(String(c))));
+  return el;
+}
+const $app = document.getElementById('app');
+const money = n => '$' + Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const money0 = n => '$' + Number(n || 0).toLocaleString('es-MX', { maximumFractionDigits: 0 });
+const num = (n, d = 1) => n == null || n === '' ? '—' : Number(n).toLocaleString('es-MX', { maximumFractionDigits: d });
+const hm = min => { min = Math.round(min || 0); return Math.floor(min / 60) + ':' + String(min % 60).padStart(2, '0'); };
+const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+const fecha = f => { if (!f) return ''; const [y, m, d] = f.slice(0, 10).split('-'); return `${Number(d)} ${MESES[Number(m) - 1]}${y !== String(new Date().getFullYear()) ? ' ' + y : ''}`; };
+const fechaHora = f => f ? fecha(f) + ' · ' + f.slice(11, 16) : '';
+const hoyLargo = () => new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
+const primerNombre = n => String(n || '').trim().split(/\s+/)[0].replace(/^./, c => c.toUpperCase());
+const iniciales = n => String(n || '?').trim().split(/\s+/).slice(0, 2).map(s => s[0]).join('').toUpperCase();
+const esc = s => String(s ?? '');
+
+function toast(msg, kind = 'info', ms = 3500) {
+  document.querySelectorAll('.toast').forEach(t => t.remove());
+  const t = h('div', { class: `toast ${kind}`, role: 'status' }, msg);
+  document.body.append(t);
+  setTimeout(() => t.classList.add('show'), 10);
+  setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, ms);
+}
+async function busy(label, fn) {
+  const ov = h('div', { class: 'overlay' }, h('div', { class: 'spinner' }), h('p', {}, label));
+  document.body.append(ov);
+  try { return await fn(); } finally { ov.remove(); }
+}
+function modal(title, body, actions) {
+  return new Promise(resolve => {
+    const close = v => { m.remove(); resolve(v); };
+    const m = h('div', { class: 'modal', onclick: e => { if (e.target === m) close(null); } },
+      h('div', { class: 'sheet' }, h('h2', {}, title), body,
+        h('div', { class: 'row', style: 'margin-top:14px' }, (actions || [['Cerrar', null]]).map(([l, v, cls]) =>
+          h('button', { class: 'btn ' + (cls || ''), onclick: async () => { if (typeof v === 'function') { const r = await v(); if (r !== false) close(r); } else close(v); } }, l)))));
+    document.body.append(m);
+    const f = m.querySelector('input,textarea,select'); if (f) setTimeout(() => f.focus(), 60);
+  });
+}
+const confirmar = (title, text, okLabel = 'Confirmar', cls = 'primary') => modal(title, h('p', {}, text), [['Cancelar', false], [okLabel, true, cls]]);
+function pinModal(title, text) {
+  const inp = h('input', { class: 'input big center', type: 'password', inputmode: 'numeric', maxlength: 6, autocomplete: 'off', placeholder: '••••••' });
+  return modal(title, h('div', {}, h('p', { class: 'muted' }, text), inp), [['Cancelar', null], ['Confirmar', () => inp.value.length === 6 ? inp.value : (toast('El PIN tiene 6 dígitos', 'warn'), false), 'primary']]);
+}
+
+// ═════════ Estado y navegación ═════════
+const state = { tab: null, noLeidos: 0 };
+const isAdmin = () => session.user?.rol === 'admin';
+const modoPatron = () => isAdmin() && session.modo === 'patron';
+
+const TABS = {
+  empleado: [['inicio', '🏠', 'Inicio'], ['asistencia', '⏱️', 'Asistencia'], ['nomina', '💵', 'Nómina'], ['solicitudes', '📝', 'Solicitudes'], ['mas', '☰', 'Más']],
+  patron: [['panel', '📊', 'Panel'], ['equipo', '⏱️', 'Asistencia'], ['pnomina', '💵', 'Nómina'], ['personal', '👥', 'Personal'], ['pmas', '☰', 'Más']],
+};
+const VIEWS = {};
+function go(tab, ...args) { state.tab = tab; (VIEWS[tab] || VIEWS[modoPatron() ? 'panel' : 'inicio'])(...args); }
+
+function screen(title, body, { back, actions, sub } = {}) {
+  $app.replaceChildren(
+    h('header', { class: 'topbar' + (modoPatron() ? ' patron' : '') },
+      back ? h('button', { class: 'icon-btn', 'aria-label': 'Regresar', onclick: back }, '←') : h('span', { class: 'logo' }, modoPatron() ? '🏢' : '📦'),
+      h('div', { class: 'tb-title' }, h('h1', {}, title), sub && h('span', { class: 'tb-sub' }, sub)),
+      actions || null,
+      h('button', { class: 'icon-btn bell', 'aria-label': 'Notificaciones', onclick: () => bandeja() }, '🔔', state.noLeidos ? h('span', { class: 'dot' }, state.noLeidos > 9 ? '9+' : state.noLeidos) : null)),
+    DEMO ? h('div', { class: 'demo-strip' }, 'Modo demostración · datos de ejemplo') : null,
+    h('main', { class: 'content' }, body),
+    nav());
+  window.scrollTo(0, 0);
+}
+function nav() {
+  const tabs = TABS[modoPatron() ? 'patron' : 'empleado'];
+  return h('nav', { class: 'tabbar' }, tabs.map(([id, icon, label]) =>
+    h('button', { class: state.tab === id ? 'active' : '', onclick: () => go(id) }, h('span', { class: 'ti' }, icon), h('span', {}, label))));
+}
+const loading = () => h('div', { class: 'spinner' });
+const errorBox = (e, retry) => h('div', { class: 'banner error' }, e.message, retry && h('div', {}, h('button', { class: 'link', onclick: retry }, 'Reintentar')));
+const kpi = (label, value, subtxt, cls = '') => h('div', { class: 'kpi ' + cls }, h('span', { class: 'kpi-l' }, label), h('strong', { class: 'kpi-v' }, value), subtxt != null && h('span', { class: 'kpi-s' }, subtxt));
+const section = t => h('h2', { class: 'section' }, t);
+const empty = (icon, text) => h('div', { class: 'empty' }, h('div', { class: 'empty-i' }, icon), h('p', {}, text));
+function segmented(options, current, onChange) {
+  return h('div', { class: 'seg' }, options.map(([k, l]) => h('button', { class: k === current ? 'on' : '', onclick: () => onChange(k) }, l)));
+}
+function table(cols, rows, onRow) {
+  if (!rows.length) return h('p', { class: 'muted' }, 'Sin datos.');
+  return h('div', { class: 'table-wrap' }, h('table', {},
+    h('thead', {}, h('tr', {}, cols.map(c => h('th', { class: c.cls || '' }, c.t)))),
+    h('tbody', {}, rows.map(r => h('tr', { class: onRow ? 'tap' : '', onclick: onRow ? () => onRow(r) : null }, cols.map(c => h('td', { class: c.cls || '' }, c.f ? c.f(r) : r[c.k])))))));
+}
+
+// ═════════ Periodos (quincenas) ═════════
+function periodoDe(d) { const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'); return `${y}-${m}-${d.getDate() <= 15 ? 1 : 2}`; }
+function periodoInfo(id) {
+  const [y, m, q] = id.split('-').map(Number);
+  const ult = new Date(y, m, 0).getDate();
+  const mes = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'][m - 1];
+  return { id, etiqueta: `${q === 1 ? '1ª' : '2ª'} quincena de ${mes}`, corta: `${q === 1 ? '1–15' : '16–' + ult} ${mes.slice(0, 3)}`, y };
+}
+function periodoMover(id, n) {
+  let [y, m, q] = id.split('-').map(Number);
+  let idx = y * 24 + (m - 1) * 2 + (q - 1) + n;
+  y = Math.floor(idx / 24); idx %= 24; m = Math.floor(idx / 2) + 1; q = (idx % 2) + 1;
+  return `${y}-${String(m).padStart(2, '0')}-${q}`;
+}
+function periodoPicker(current, onChange) {
+  const actual = periodoDe(new Date());
+  const p = periodoInfo(current);
+  return h('div', { class: 'per-picker' },
+    h('button', { class: 'icon-btn ghost', 'aria-label': 'Quincena anterior', onclick: () => onChange(periodoMover(current, -1)) }, '‹'),
+    h('div', { class: 'per-label' }, h('strong', {}, p.etiqueta), h('span', { class: 'muted small' }, current === actual ? 'Quincena actual' : p.y)),
+    h('button', { class: 'icon-btn ghost', 'aria-label': 'Quincena siguiente', disabled: current >= actual, onclick: () => onChange(periodoMover(current, 1)) }, '›'));
+}
+
+// ═════════ Login: RFC + PIN ═════════
+async function login() {
+  const card = h('div', { class: 'card' });
+  $app.replaceChildren(h('div', { class: 'login' },
+    h('div', { class: 'brand' }, h('div', { class: 'logo-big' }, '📦'), h('h1', {}, 'Mi Portal'), h('p', {}, 'Packatelas · Computenga')),
+    DEMO && h('div', { class: 'banner info' }, h('strong', {}, 'Demostración. '), 'RFC del patrón: GUPC900101AB1 · empleado: LOAS950505H12 · PIN 482915 (o cualquier RFC nuevo con No. 4)'),
+    card));
+  pasoRfc(card);
+}
+
+function pasoRfc(card) {
+  const rfc = h('input', { class: 'input big mono', placeholder: 'Tu RFC', autocapitalize: 'characters', autocomplete: 'username', maxlength: 13, value: session.lastRfc });
+  const go = async () => {
+    const v = rfc.value.toUpperCase().replace(/[\s-]/g, '');
+    if (!/^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/.test(v)) return toast('Revisa tu RFC: son 13 caracteres (ej. LOAS950505H12)', 'warn');
+    try {
+      const r = await busy('Buscando…', () => api('estadoRfc', { rfc: v }));
+      session.lastRfc = v;
+      if (r.estado === 'bloqueado') return fill(card, h('h3', {}, 'Acceso bloqueado'), h('p', { class: 'muted' }, 'Tu PIN se bloqueó por intentos fallidos. Pide a RH que lo reinicie.'), h('button', { class: 'btn block', onclick: () => pasoRfc(card) }, 'Regresar'));
+      r.estado === 'nuevo' ? pasoNuevo(card, v) : pasoPin(card, v);
+    } catch (e) { toast(e.message, 'error', 5000); }
+  };
+  rfc.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+  fill(card, h('label', { class: 'label' }, 'RFC'), rfc, h('button', { class: 'btn primary block', onclick: go }, 'Continuar'),
+    h('p', { class: 'muted small center' }, '¿Primera vez? Escribe tu RFC y crea tu PIN.'));
+}
+
+function keypad(onDone, { len = 6, label } = {}) {
+  let pin = '';
+  const dots = h('div', { class: 'pin-dots' });
+  const draw = () => fill(dots, Array.from({ length: len }, (_, i) => h('span', { class: i < pin.length ? 'on' : '' })));
+  draw();
+  const press = k => () => {
+    if (k === '⌫') pin = pin.slice(0, -1);
+    else if (pin.length < len) pin += k;
+    draw();
+    if (pin.length === len) { const p = pin; setTimeout(async () => { const keep = await onDone(p); if (!keep) { pin = ''; draw(); } }, 120); }
+  };
+  return h('div', {}, label && h('p', { class: 'center muted' }, label), dots,
+    h('div', { class: 'keypad' }, ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'].map(k => k ? h('button', { class: 'key', onclick: press(k) }, k) : h('span'))));
+}
+
+function pasoPin(card, rfc) {
+  fill(card, h('div', { class: 'row between' }, h('span', { class: 'mono' }, rfc), h('button', { class: 'link', onclick: () => pasoRfc(card) }, 'Cambiar')),
+    keypad(async pin => {
+      try {
+        const r = await busy('Entrando…', () => api('login', { rfc, pin }));
+        session.set(r.token, r.usuario);
+        start();
+        return true;
+      } catch (e) { toast(e.message, 'error', 5000); if (/bloquead/.test(e.message)) pasoRfc(card); return false; }
+    }, { label: 'Escribe tu PIN de 6 dígitos' }),
+    h('p', { class: 'muted small center' }, '¿Olvidaste tu PIN? Pide a RH que lo reinicie.'));
+}
+
+function pasoNuevo(card, rfc) {
+  const no = h('input', { class: 'input big', inputmode: 'numeric', placeholder: 'Ej. 45' });
+  fill(card, h('h3', {}, 'Bienvenido 👋'), h('p', { class: 'muted' }, 'Es tu primer acceso. Para confirmar que eres tú, escribe tu número de empleado (el mismo del checador).'),
+    h('label', { class: 'label' }, 'Número de empleado'), no,
+    h('button', { class: 'btn primary block', onclick: () => {
+      if (!no.value.trim()) return toast('Escribe tu número de empleado', 'warn');
+      let first = null;
+      fill(card, h('h3', {}, 'Crea tu PIN'), h('p', { class: 'muted small' }, 'Lo usarás para entrar y para firmar tus recibos. No lo compartas.'),
+        keypad(async pin => {
+          if (!first) { if (/^(\d)\1{5}$|^123456$|^654321$/.test(pin)) { toast('Ese PIN es muy fácil, elige otro', 'warn'); return false; } first = pin; card.querySelector('.center.muted').textContent = 'Repite tu PIN'; return false; }
+          if (pin !== first) { first = null; card.querySelector('.center.muted').textContent = 'No coincidió. Escribe un PIN nuevo'; toast('Los PIN no coinciden', 'warn'); return false; }
+          try {
+            const r = await busy('Creando acceso…', () => api('primerAcceso', { rfc, no_empleado: no.value.trim(), pin }));
+            session.set(r.token, r.usuario);
+            toast('¡Listo! Ya tienes acceso', 'ok');
+            start();
+            return true;
+          } catch (e) { toast(e.message, 'error', 5000); pasoNuevo(card, rfc); return true; }
+        }, { label: 'Escribe un PIN de 6 dígitos' }));
+    } }, 'Continuar'),
+    h('button', { class: 'link', onclick: () => pasoRfc(card) }, 'Regresar'));
+}
+
+// ═════════ Tarjetas comunes ═════════
+function pushCard() {
+  const st = pushState();
+  if (st === 'granted') return null;
+  if (isIOS() && !isStandalone()) return h('div', { class: 'card soft' }, h('h3', {}, '📲 Instala la app'),
+    h('p', { class: 'muted' }, 'Para recibir avisos de tu nómina en iPhone: toca Compartir ', h('b', {}, '⬆︎'), ' → "Agregar a pantalla de inicio" y abre el portal desde ese ícono.'));
+  if (st === 'no_soportado') return null;
+  return h('div', { class: 'card soft' }, h('h3', {}, '🔔 Activa las notificaciones'),
+    h('p', { class: 'muted' }, st === 'denied' ? 'Las bloqueaste. Actívalas en la configuración del sitio en tu navegador.' : 'Te avisamos cuando llegue tu recibo, tu depósito o la respuesta a tus solicitudes.'),
+    st !== 'denied' && h('button', { class: 'btn primary', onclick: async () => {
+      try { await busy('Activando…', enablePush); toast('Notificaciones activadas', 'ok'); go(state.tab); } catch (e) { toast(e.message, 'error'); }
+    } }, 'Activar'));
+}
+
+const ESTADOS = {
+  A_TIEMPO: ['A tiempo', 'ok'], RETARDO: ['Retardo', 'warn'], FALTA: ['Falta', 'err'], JUSTIFICADA: ['Justificada', 'info'],
+  PENDIENTE: ['Sin checar aún', 'muted'], DESCANSO: ['Descanso', 'muted'], DESCANSO_TRABAJADO: ['Descanso (checó)', 'info'],
+  FUTURO: ['—', 'muted'], ANTES: ['Antes del checador', 'muted'], SIN_DATOS: ['—', 'muted'], SIN_HORARIO: ['Sin horario', 'muted'],
+};
+const estadoBadge = e => { const [l, c] = ESTADOS[e] || [e, 'muted']; return h('span', { class: 'badge b-' + c }, l); };
+const TIPO_MARCA = { ENTRADA: 'Entrada', SALIDA_COMIDA: 'Salió a comer', REGRESO_COMIDA: 'Regresó', SALIDA: 'Salida' };
+
+function reciboBadges(r) {
+  return h('span', { class: 'row wrap gap4' },
+    r.estatus === 'cancelado' ? h('span', { class: 'badge b-err' }, 'Cancelado') : r.estatus === 'pagado' ? h('span', { class: 'badge b-ok' }, 'Pagado') : h('span', { class: 'badge b-warn' }, 'Por pagar'),
+    r.estatus !== 'cancelado' && (r.firma_fecha ? h('span', { class: 'badge b-info' }, '✓ Firmado') : h('span', { class: 'badge b-warn' }, 'Por firmar')));
+}
+
+// ═════════════════════ EMPLEADO ═════════════════════
+
+VIEWS.inicio = async function inicio() {
+  const body = h('div', {}, h('p', { class: 'muted cap' }, hoyLargo()), loading());
+  screen('Hola, ' + primerNombre(session.user.nombre), body);
+  let d, offline;
+  try { ({ data: d, offline } = await cached('inicio')); } catch (e) { return fill(body, errorBox(e, inicio)); }
+  setBadge(d.no_leidos);
+  const a = d.asistencia, hd = d.hoy_detalle;
+  fill(body,
+    h('p', { class: 'muted cap' }, hoyLargo()),
+    offline && h('div', { class: 'banner warn' }, 'Sin conexión: mostrando lo último que se cargó.'),
+    d.recibos_sin_firmar > 0 && h('button', { class: 'banner action warn', onclick: () => go('nomina') },
+      h('strong', {}, `🧾 Tienes ${d.recibos_sin_firmar} recibo${d.recibos_sin_firmar > 1 ? 's' : ''} por firmar`), h('span', {}, 'Revísalo y confirma de recibido →')),
+
+    h('div', { class: 'hero ' + (hd ? 'st-' + hd.estado : '') },
+      h('div', { class: 'hero-l' }, h('span', { class: 'hero-k' }, 'Hoy'),
+        hd && hd.entrada ? h('strong', { class: 'hero-v' }, hd.entrada) : h('strong', { class: 'hero-v dim' }, hd && hd.laboral ? '--:--' : 'Descanso'),
+        h('span', { class: 'hero-s' }, hd ? (hd.entrada ? `Entrada · debías ${hd.debia || '—'}` : hd.laboral ? `Entras a las ${hd.debia}` : 'No es día laboral') : 'Sin horario asignado')),
+      h('div', { class: 'hero-r' }, hd && estadoBadge(hd.estado),
+        hd && hd.min_tarde > 0 && h('span', { class: 'hero-late' }, `+${hd.min_tarde} min`),
+        hd && hd.marcas.length > 1 && h('span', { class: 'muted small' }, hd.marcas.slice(1).map(m => `${TIPO_MARCA[m.tipo]} ${m.hora}`).join(' · ')))),
+
+    section(d.periodo.etiqueta),
+    h('button', { class: 'kpis plain', onclick: () => go('asistencia') },
+      kpi('Retrasos', hm(a.min_total), `${a.retardos + a.retardos_comida} vez(es)`, a.min_total ? 'warn' : ''),
+      kpi('Faltas', a.faltas, a.justificadas ? `${a.justificadas} justificada(s)` : 'en la quincena', a.faltas ? 'err' : ''),
+      kpi('A descontar', num(a.horas_descuento, 2) + ' h', 'faltas + retrasos', a.horas_descuento ? 'warn' : ''),
+      kpi('Asistencias', `${a.asistencias}/${a.dias_laborales}`, 'días laborales')),
+
+    section('Nómina'),
+    d.ultimo_pago ? h('button', { class: 'card tap row between', onclick: () => go('nomina', 'pagos') },
+      h('div', {}, h('span', { class: 'muted small' }, 'Último depósito · ' + fechaHora(d.ultimo_pago.fecha)), h('h3', { class: 'amount big' }, money(d.ultimo_pago.monto)), h('span', { class: 'muted small' }, d.ultimo_pago.concepto)),
+      h('span', { class: 'chev' }, '›')) : null,
+    d.ultimo_recibo ? h('button', { class: 'card tap row between', onclick: () => reciboView(d.ultimo_recibo.recibo_id) },
+      h('div', {}, h('span', { class: 'muted small' }, 'Último recibo · ' + d.ultimo_recibo.etiqueta), h('h3', { class: 'amount' }, money(d.ultimo_recibo.neto)), reciboBadges(d.ultimo_recibo)),
+      h('span', { class: 'chev' }, '›')) : h('div', { class: 'card soft' }, h('p', { class: 'muted' }, 'Aún no tienes recibos en el portal.')),
+    (d.saldo_adeudos > 0 || d.cargos_pendientes > 0) && h('button', { class: 'card tap row between', onclick: () => adeudosView() },
+      h('div', {}, h('span', { class: 'muted small' }, 'Adeudos y cargos'), h('h3', { class: 'amount' }, money(d.saldo_adeudos + d.cargos_pendientes)),
+        h('span', { class: 'muted small' }, [d.saldo_adeudos > 0 && `Préstamos ${money0(d.saldo_adeudos)}`, d.cargos_pendientes > 0 && `Flotilla ${money0(d.cargos_pendientes)} por descontar`].filter(Boolean).join(' · '))),
+      h('span', { class: 'chev' }, '›')),
+    d.solicitudes_pendientes > 0 && h('button', { class: 'card tap row between', onclick: () => go('solicitudes') },
+      h('div', {}, h('h3', {}, `📝 ${d.solicitudes_pendientes} solicitud(es) en revisión`), h('span', { class: 'muted small' }, 'Te avisamos cuando RH responda')), h('span', { class: 'chev' }, '›')),
+    pushCard(),
+    h('div', { class: 'quick' },
+      h('button', { class: 'q', onclick: () => nuevaSolicitud('justificante') }, h('span', {}, '🩺'), 'Justificar falta'),
+      h('button', { class: 'q', onclick: () => nuevaSolicitud('vacaciones') }, h('span', {}, '🏖️'), 'Vacaciones'),
+      h('button', { class: 'q', onclick: () => nuevaSolicitud('anticipo') }, h('span', {}, '💳'), 'Anticipo'),
+      h('button', { class: 'q', onclick: () => documentosView() }, h('span', {}, '📄'), 'Documentos')),
+  );
+};
+
+VIEWS.asistencia = async function asistencia(periodo, noEmpleado, nombre) {
+  periodo = periodo || periodoDe(new Date());
+  const admin = !!noEmpleado;
+  const body = h('div', {}, loading());
+  screen(admin ? nombre : 'Mi asistencia', body, admin ? { back: () => go('equipo', periodo), sub: 'Asistencia' } : {});
+  let a;
+  try { a = admin ? await api('asistenciaDe', { no_empleado: noEmpleado, periodo }) : (await cached('asistencia', { periodo })).data; }
+  catch (e) { return fill(body, errorBox(e)); }
+  const t = a.totales;
+  const ver = p => admin ? VIEWS.asistencia(p, noEmpleado, nombre) : (state.tab = 'asistencia', VIEWS.asistencia(p));
+  const dias = a.dias.filter(d => !['FUTURO', 'SIN_DATOS'].includes(d.estado) || d.marcas.length).reverse();
+  fill(body,
+    periodoPicker(periodo, ver),
+    a.horario && !a.sin_horario ? h('p', { class: 'muted small center' }, `Horario: entrada ${a.horario.entrada} · ${a.horario.dias} · comida ${a.horario.comida} min · tolerancia 0 min`)
+      : h('div', { class: 'banner warn' }, 'No tienes horario capturado en el checador; por eso no se calculan retardos ni faltas. Avísale a RH.'),
+    a.cuenta_desde > a.periodo.desde && h('p', { class: 'muted small center' }, `Se cuenta desde el ${fecha(a.cuenta_desde)}.`),
+    h('div', { class: 'kpis' },
+      kpi('Minutos tarde', hm(t.min_tarde), `${t.retardos} entrada(s) tarde`, t.min_tarde ? 'warn' : ''),
+      kpi('Comida extra', hm(t.min_comida_extra), `${t.retardos_comida} vez(es)`, t.min_comida_extra ? 'warn' : ''),
+      kpi('Faltas', t.faltas, `${t.horas_faltas} h · ${t.justificadas} justificada(s)`, t.faltas ? 'err' : ''),
+      kpi('Total a descontar', num(t.horas_descuento, 2) + ' h', `${hm(t.min_total)} retraso + faltas`, t.horas_descuento ? 'warn' : 'ok')),
+    section('Día por día'),
+    dias.length ? h('div', { class: 'days' }, dias.map(d => h('div', { class: 'day st-' + d.estado },
+      h('div', { class: 'day-d' }, h('strong', {}, d.fecha.slice(8)), h('span', {}, d.dia)),
+      h('div', { class: 'day-b' },
+        h('div', { class: 'row between' }, estadoBadge(d.estado),
+          d.min_tarde > 0 ? h('strong', { class: 'late' }, `+${d.min_tarde} min`) : d.entrada ? h('span', { class: 'ok-t' }, d.entrada) : null),
+        d.entrada && h('p', { class: 'small' }, `Entró ${d.entrada}`, d.debia && h('span', { class: 'muted' }, ` · debía ${d.debia}`)),
+        d.min_comida != null && h('p', { class: 'small' }, `Comida ${d.min_comida} min`, d.min_comida_extra > 0 && h('strong', { class: 'late' }, ` (+${d.min_comida_extra})`)),
+        d.motivo && h('p', { class: 'small muted' }, d.motivo),
+        d.marcas.length > 1 && h('p', { class: 'small muted' }, d.marcas.map(m => `${TIPO_MARCA[m.tipo]} ${m.hora}`).join(' · ')))))) : empty('🗓️', 'Sin días que mostrar en esta quincena.'),
+    !admin && h('button', { class: 'btn block', onclick: () => nuevaSolicitud('justificante') }, '🩺 Justificar una falta'),
+  );
+};
+
+VIEWS.nomina = async function nomina(tab = 'recibos') {
+  state.tab = 'nomina';
+  const body = h('div', {}, segmented([['recibos', 'Recibos'], ['pagos', 'Depósitos']], tab, t => VIEWS.nomina(t)), loading());
+  screen('Mi nómina', body);
+  try {
+    if (tab === 'recibos') {
+      const { data: l } = await cached('recibos');
+      fill(body, body.firstChild,
+        l.length ? l.map(r => h('button', { class: 'card tap rec', onclick: () => reciboView(r.recibo_id) },
+          h('div', { class: 'row between' }, h('div', {}, h('h3', {}, r.etiqueta), h('span', { class: 'muted small' }, `${fecha(r.desde)} – ${fecha(r.hasta)} · ${r.recibo_id}`)),
+            h('strong', { class: 'amount big' }, money(r.neto))),
+          h('div', { class: 'row between', style: 'margin-top:8px' }, reciboBadges(r), r.fecha_pago && h('span', { class: 'muted small' }, 'Pagado ' + fecha(r.fecha_pago)))))
+          : empty('🧾', 'Cuando RH emita tu recibo de nómina aparecerá aquí y te llegará un aviso.'));
+    } else {
+      const { data: l } = await cached('pagos');
+      const total = l.filter(p => p.fecha.slice(0, 4) === String(new Date().getFullYear())).reduce((s, p) => s + p.monto, 0);
+      fill(body, body.firstChild,
+        l.length ? [h('div', { class: 'kpis one' }, kpi('Depositado este año', money(total), `${l.length} depósito(s) registrados`)),
+          l.map(p => h('div', { class: 'card pay' },
+            h('div', { class: 'row between' }, h('div', {}, h('h3', { class: 'amount' }, money(p.monto)), h('span', { class: 'muted small cap' }, p.concepto)),
+              h('span', { class: 'muted small right' }, fecha(p.fecha), h('br'), p.fecha.slice(11, 16))),
+            h('div', { class: 'row between small', style: 'margin-top:6px' },
+              h('span', { class: 'muted mono' }, p.clave_rastreo && !/^MANUAL/.test(p.clave_rastreo) ? 'Rastreo ' + p.clave_rastreo : p.origen === 'manual' ? 'Pago registrado por RH' : ''),
+              p.recibo_id ? h('button', { class: 'link', onclick: () => reciboView(p.recibo_id) }, 'Ver recibo') : null)))]
+          : empty('💸', 'Aquí verás cada depósito de nómina en cuanto salga de la cuenta de la empresa.'));
+    }
+  } catch (e) { fill(body, body.firstChild, errorBox(e)); }
+};
+
+async function reciboView(id, back) {
+  const body = h('div', {}, loading());
+  screen('Recibo de nómina', body, { back: back || (() => go(modoPatron() ? 'pnomina' : 'nomina', modoPatron() ? 'recibos' : undefined)) });
+  let r;
+  try { r = await api('recibo', { recibo_id: id }); } catch (e) { return fill(body, errorBox(e)); }
+  const propio = r.no_empleado === session.user.no_empleado;
+  const a = r.detalle.asistencia || {};
+  const line = (l, v, sub) => v ? h('div', { class: 'rl' }, h('span', {}, l, sub && h('small', { class: 'muted' }, ' ' + sub)), h('span', { class: 'amount' }, money(v))) : null;
+  fill(body,
+    h('div', { class: 'receipt' },
+      h('div', { class: 'r-head' }, h('div', {}, h('span', { class: 'muted small' }, 'Comercializadora Computenga'), h('h2', {}, r.etiqueta), h('span', { class: 'muted small' }, `${r.nombre} · No. ${r.no_empleado}`)),
+        h('span', { class: 'muted small mono' }, r.recibo_id)),
+      h('div', { class: 'r-neto' }, h('span', {}, 'Neto a pagar'), h('strong', {}, money(r.neto))),
+      reciboBadges(r),
+      h('h3', { class: 'r-sec' }, 'Percepciones'),
+      line(`Sueldo`, r.sueldo, `${r.dias} días × ${money(r.salario_diario)}`), line('Bonos', r.bonos, r.detalle.concepto_bonos), line('Otras percepciones', r.otras_percepciones, r.detalle.concepto_otras),
+      h('div', { class: 'rl tot' }, h('span', {}, 'Total percepciones'), h('span', { class: 'amount' }, money(r.total_percepciones))),
+      h('h3', { class: 'r-sec' }, 'Deducciones'),
+      line('Faltas', r.desc_faltas, a.faltas != null ? `${a.faltas} día(s)` : ''), line('Retardos', r.desc_retardos, a.min_total != null ? hm(a.min_total) + ' h' : ''),
+      line('Cargos de flotilla', r.desc_cargos), line('Abono a adeudos', r.desc_adeudos), line('Otras deducciones', r.otras_deducciones),
+      !r.total_deducciones && h('p', { class: 'muted small' }, 'Sin deducciones 🎉'),
+      h('div', { class: 'rl tot' }, h('span', {}, 'Total deducciones'), h('span', { class: 'amount' }, money(r.total_deducciones))),
+      (r.detalle.cargos || []).length > 0 && h('div', {}, h('h3', { class: 'r-sec' }, 'Detalle de cargos'), r.detalle.cargos.map(c => line(`${c.vehiculo_id} · ${c.descripcion}`, c.monto, fecha(c.fecha)))),
+      (r.detalle.abonos || []).length > 0 && h('div', {}, h('h3', { class: 'r-sec' }, 'Detalle de abonos'), r.detalle.abonos.map(x => line(x.concepto, x.monto))),
+      r.detalle.notas && h('p', { class: 'small', style: 'margin-top:12px' }, '📝 ', r.detalle.notas),
+      h('p', { class: 'muted small', style: 'margin-top:14px' }, `Emitido ${fechaHora(r.fecha_emision)}`, r.firma_fecha && ` · Firmado ${fechaHora(r.firma_fecha)}`, r.fecha_pago && ` · Pagado ${fechaHora(r.fecha_pago)}`),
+      h('p', { class: 'muted tiny' }, 'Comprobante interno. No sustituye al CFDI de nómina.')),
+    propio && !r.firma_fecha && r.estatus !== 'cancelado' && h('button', { class: 'btn primary block', onclick: async () => {
+      const pin = await pinModal('Firmar de recibido', `Confirmas que revisaste tu recibo de la ${r.etiqueta} por ${money(r.neto)}.`);
+      if (!pin) return;
+      try { await busy('Firmando…', () => api('firmarRecibo', { recibo_id: id, pin, dispositivo: navigator.userAgent })); toast('Recibo firmado', 'ok'); reciboView(id, back); }
+      catch (e) { toast(e.message, 'error'); }
+    } }, '✍️ Firmar de recibido'),
+    h('button', { class: 'btn block', onclick: async () => {
+      try { const f = await busy('Descargando…', () => api('reciboPdf', { recibo_id: id })); openBase64(f); } catch (e) { toast(e.message, 'error'); }
+    } }, '⬇️ Descargar PDF'),
+    modoPatron() && r.estatus !== 'cancelado' && h('button', { class: 'btn danger-o block', onclick: async () => {
+      if (!await confirmar('Cancelar recibo', `Se cancela ${r.recibo_id} de ${r.nombre}. Los abonos a adeudos se regresan y el pago (si tiene) queda sin recibo.`, 'Cancelar recibo', 'danger')) return;
+      try { await busy('Cancelando…', () => api('cancelarRecibo', { recibo_id: id })); toast('Recibo cancelado', 'ok'); go('pnomina', 'recibos'); } catch (e) { toast(e.message, 'error'); }
+    } }, 'Cancelar recibo'),
+  );
+}
+
+VIEWS.solicitudes = async function solicitudes() {
+  const body = h('div', {}, loading());
+  screen('Solicitudes', body, { actions: h('button', { class: 'icon-btn', 'aria-label': 'Nueva', onclick: () => nuevaSolicitud() }, '＋') });
+  try {
+    const [{ data: l }, { data: pf }] = await Promise.all([cached('solicitudes'), cached('perfil')]);
+    const v = pf.vacaciones;
+    fill(body,
+      h('div', { class: 'card vac' },
+        h('div', { class: 'row between' }, h('h3', {}, '🏖️ Vacaciones'), v.sin_fecha ? null : h('strong', { class: 'big' }, v.disponibles, h('small', { class: 'muted' }, ' días'))),
+        v.sin_fecha ? h('p', { class: 'muted small' }, 'RH aún no captura tu fecha de ingreso.')
+          : v.derecho ? [h('div', { class: 'bar' }, h('span', { style: `width:${Math.min(100, (v.tomados / v.derecho) * 100)}%` })),
+            h('p', { class: 'muted small' }, `${v.tomados} de ${v.derecho} usados en tu año ${v.anios} de servicio (desde ${fecha(v.desde)}). Próximo aniversario ${fecha(v.proximo_aniversario)}: ${v.dias_proximo} días.`)]
+            : h('p', { class: 'muted small' }, `Al cumplir tu primer año (${fecha(v.proximo_aniversario)}) tendrás ${v.dias_proximo} días, según la LFT.`)),
+      h('div', { class: 'quick' },
+        [['justificante', '🩺', 'Justificar falta'], ['permiso', '🙋', 'Permiso'], ['vacaciones', '🏖️', 'Vacaciones'], ['anticipo', '💳', 'Anticipo']].map(([t, i, l]) =>
+          h('button', { class: 'q', onclick: () => nuevaSolicitud(t) }, h('span', {}, i), l))),
+      section('Mis solicitudes'),
+      l.length ? l.map(s => solCard(s)) : empty('📝', 'No has hecho solicitudes.'));
+  } catch (e) { fill(body, errorBox(e)); }
+};
+
+const SOL_EST = { pendiente: ['En revisión', 'warn'], aprobada: ['Aprobada', 'ok'], rechazada: ['Rechazada', 'err'] };
+function solCard(s, actions) {
+  const [l, c] = SOL_EST[s.estatus] || [s.estatus, 'muted'];
+  return h('div', { class: 'card sol s-' + s.estatus },
+    h('div', { class: 'row between' }, h('h3', {}, s.tipo_txt), h('span', { class: 'badge b-' + c }, l)),
+    actions && h('p', { class: 'small' }, h('strong', {}, s.nombre), ` · No. ${s.no_empleado}`),
+    s.fecha_desde && h('p', { class: 'small' }, '📅 ', fecha(s.fecha_desde), s.fecha_hasta && s.fecha_hasta !== s.fecha_desde ? ` → ${fecha(s.fecha_hasta)}` : '', s.dias ? ` · ${s.dias} día(s) laboral(es)` : ''),
+    s.monto > 0 && h('p', { class: 'small' }, '💵 ', money(s.monto)),
+    s.motivo && h('p', { class: 'small muted' }, s.motivo),
+    s.evidencia && h('p', { class: 'small' }, '📎 Con evidencia adjunta'),
+    s.comentario && h('p', { class: 'small' }, h('strong', {}, 'RH: '), s.comentario),
+    h('p', { class: 'muted tiny' }, `${s.sol_id} · ${fechaHora(s.fecha_solicitud)}`, s.fecha_resolucion && ` · resuelta ${fechaHora(s.fecha_resolucion)}`),
+    actions || null);
+}
+
+async function nuevaSolicitud(tipo = 'justificante') {
+  const hoy = new Date().toISOString().slice(0, 10);
+  let evidencia = null;
+  const st = { tipo };
+  const desde = h('input', { class: 'input', type: 'date', value: tipo === 'justificante' ? hoy : '' });
+  const hasta = h('input', { class: 'input', type: 'date' });
+  const monto = h('input', { class: 'input big', type: 'number', inputmode: 'decimal', placeholder: '0.00' });
+  const motivo = h('textarea', { class: 'input', rows: 3, placeholder: 'Cuéntale a RH el motivo' });
+  const evBox = h('div');
+  const drawEv = () => fill(evBox, evidencia
+    ? h('div', { class: 'row between card soft' }, h('span', {}, '📎 ', evidencia.name || 'Archivo'), h('button', { class: 'link danger', onclick: () => { evidencia = null; drawEv(); } }, 'Quitar'))
+    : h('button', { class: 'btn', onclick: async () => { const f = await pickFile(); if (f) { evidencia = await readFile(f); drawEv(); } } }, '📎 Adjuntar foto o PDF (receta, comprobante…)'));
+  drawEv();
+  const form = h('div');
+  const draw = () => fill(form,
+    h('div', { class: 'chips' }, [['justificante', '🩺 Justificante'], ['permiso', '🙋 Permiso'], ['vacaciones', '🏖️ Vacaciones'], ['anticipo', '💳 Anticipo'], ['otro', 'Otro']].map(([k, l]) =>
+      h('button', { class: 'chip ' + (st.tipo === k ? 'on' : ''), onclick: () => { st.tipo = k; draw(); } }, l))),
+    st.tipo !== 'anticipo' && st.tipo !== 'otro' && h('div', { class: 'grid2' },
+      h('div', {}, h('label', { class: 'label' }, st.tipo === 'justificante' ? 'Día de la falta' : 'Desde'), desde),
+      h('div', {}, h('label', { class: 'label' }, 'Hasta (opcional)'), hasta)),
+    st.tipo === 'anticipo' && h('div', {}, h('label', { class: 'label' }, 'Monto que necesitas'), monto,
+      h('p', { class: 'muted small' }, 'Si se aprueba, se descuenta de tus siguientes quincenas.')),
+    h('label', { class: 'label' }, st.tipo === 'vacaciones' ? 'Comentario (opcional)' : 'Motivo'), motivo,
+    ['justificante', 'permiso', 'otro'].includes(st.tipo) && evBox,
+    h('button', { class: 'btn primary block', onclick: enviar }, 'Enviar solicitud'));
+  const enviar = async () => {
+    try {
+      await busy('Enviando…', async () => {
+        let ev = '';
+        if (evidencia && ['justificante', 'permiso', 'otro'].includes(st.tipo)) ev = (await api('subirEvidencia', { base64: evidencia.base64, mime: evidencia.mime })).id;
+        await api('crearSolicitud', { tipo: st.tipo, fecha_desde: desde.value, fecha_hasta: hasta.value || desde.value, monto: monto.value, motivo: motivo.value, evidencia: ev });
+      });
+      toast('Solicitud enviada. Te avisamos cuando RH responda.', 'ok', 4500);
+      go('solicitudes');
+    } catch (e) { toast(e.message, 'error', 5000); }
+  };
+  draw();
+  screen('Nueva solicitud', form, { back: () => go('solicitudes') });
+}
+
+VIEWS.mas = async function mas() {
+  const u = session.user;
+  const body = h('div', {},
+    h('div', { class: 'card row', style: 'gap:12px' }, h('div', { class: 'avatar' }, iniciales(u.nombre)),
+      h('div', {}, h('h3', {}, u.nombre), h('p', { class: 'muted small' }, `No. ${u.no_empleado}${u.puesto ? ' · ' + u.puesto : ''}`))),
+    isAdmin() && h('button', { class: 'card tap row between switch', onclick: () => { session.modo = 'patron'; start(); } },
+      h('div', {}, h('h3', {}, '🏢 Cambiar a modo patrón'), h('p', { class: 'muted small' }, 'Panel, prenómina, recibos, pagos y personal')), h('span', { class: 'chev' }, '›')),
+    menu([
+      ['👤', 'Mis datos', 'RFC, CLABE, horario, antigüedad', perfilView],
+      ['💳', 'Adeudos y cargos', 'Préstamos, anticipos y cargos de flotilla', adeudosView],
+      ['📄', 'Mis documentos', 'Contrato, constancias y más', documentosView],
+      ['🔔', 'Notificaciones', 'Tu bandeja de avisos', () => bandeja()],
+      ['🔑', 'Cambiar PIN', '', cambiarPin],
+    ]),
+    pushCard() || h('p', { class: 'muted small center' }, pushState() === 'granted' ? '🔔 Notificaciones activas en este teléfono' : ''),
+    h('button', { class: 'btn danger-o block', onclick: () => { session.clear(); location.reload(); } }, 'Cerrar sesión'),
+    h('p', { class: 'muted small center' }, 'Portal Packatelas · v' + (window.APP_VERSION || '1')));
+  screen('Más', body);
+};
+
+function menu(items) {
+  return h('div', { class: 'menu' }, items.filter(Boolean).map(([i, t, s, fn, badge]) => h('button', { class: 'mi', onclick: fn },
+    h('span', { class: 'mi-i' }, i), h('span', { class: 'mi-t' }, h('strong', {}, t), s && h('small', { class: 'muted' }, s)),
+    badge ? h('span', { class: 'badge b-warn' }, badge) : null, h('span', { class: 'chev' }, '›'))));
+}
+
+async function perfilView() {
+  const body = h('div', {}, loading());
+  screen('Mis datos', body, { back: () => go('mas') });
+  try {
+    const { data: p } = await cached('perfil');
+    const row = (l, v) => h('div', { class: 'kv' }, h('span', { class: 'muted' }, l), h('strong', {}, v || '—'));
+    fill(body,
+      h('div', { class: 'card' }, row('Nombre', p.nombre), row('No. empleado', p.no_empleado), row('Puesto', p.puesto), row('Área', p.area),
+        row('Ingreso', p.fecha_ingreso ? fecha(p.fecha_ingreso) : ''), row('Antigüedad', p.antiguedad)),
+      h('div', { class: 'card' }, row('RFC', p.rfc), row('CURP', p.curp), row('NSS', p.nss)),
+      h('div', { class: 'card' }, row('Cuenta de nómina', p.clabe ? `${p.banco || ''} ${p.clabe}` : ''), row('Teléfono', p.telefono), row('Correo', p.correo)),
+      h('div', { class: 'card' }, row('Hora de entrada', p.horario.entrada), row('Días laborales', p.horario.dias), row('Comida', p.horario.comida ? p.horario.comida + ' min' : ''),
+        row('Celular en checador', p.celular_checador ? 'Registrado ✓' : 'No registrado')),
+      h('p', { class: 'muted small center' }, '¿Algún dato está mal? Avísale a RH para corregirlo.'));
+  } catch (e) { fill(body, errorBox(e)); }
+}
+
+async function adeudosView() {
+  const body = h('div', {}, loading());
+  screen('Adeudos y cargos', body, { back: () => go(state.tab === 'inicio' ? 'inicio' : 'mas') });
+  try {
+    const { data: d } = await cached('adeudos');
+    fill(body,
+      h('div', { class: 'kpis' }, kpi('Saldo de préstamos', money(d.saldo_total), 'se descuenta por quincena', d.saldo_total ? 'warn' : 'ok'),
+        kpi('Cargos flotilla', money(d.cargos_pendientes), 'por descontar', d.cargos_pendientes ? 'warn' : 'ok')),
+      section('Préstamos y anticipos'),
+      d.adeudos.length ? d.adeudos.map(a => h('div', { class: 'card' },
+        h('div', { class: 'row between' }, h('h3', {}, a.concepto), h('span', { class: 'badge b-' + (a.estatus === 'activo' ? 'warn' : 'ok') }, a.estatus === 'activo' ? 'Activo' : 'Liquidado')),
+        h('div', { class: 'bar' }, h('span', { style: `width:${a.monto_total ? Math.round((1 - a.saldo / a.monto_total) * 100) : 100}%` })),
+        h('p', { class: 'small' }, `Saldo ${money(a.saldo)} de ${money(a.monto_total)} · ${money(a.cuota)} por quincena`),
+        h('p', { class: 'muted tiny' }, `${a.adeudo_id} · desde ${fecha(a.fecha_alta)}`),
+        d.abonos.filter(x => x.adeudo_id === a.adeudo_id).length > 0 && h('details', {}, h('summary', { class: 'small' }, 'Abonos'),
+          d.abonos.filter(x => x.adeudo_id === a.adeudo_id).map(x => h('p', { class: 'small row between' }, h('span', {}, fecha(x.fecha) + ' · ' + x.recibo_id), h('span', { class: 'amount' }, money(x.monto)))))))
+        : empty('✅', 'Sin préstamos.'),
+      section('Cargos de flotilla'),
+      d.cargos.length ? d.cargos.map(c => h('div', { class: 'card falla' },
+        h('div', { class: 'row between' }, h('h3', {}, `${c.vehiculo_id} · ${money(c.monto)}`), h('span', { class: 'badge b-' + (c.estatus === 'pendiente' ? 'warn' : 'ok') }, c.estatus === 'pendiente' ? 'Por descontar' : 'Descontado')),
+        h('p', { class: 'small' }, c.descripcion), h('p', { class: 'muted tiny' }, `${c.rep_id} · ${fecha(c.fecha)}${c.recibo_id ? ' · ' + c.recibo_id : ''}${c.costo_total ? ' · costo total ' + money(c.costo_total) : ''}`)))
+        : empty('🛵', 'Sin cargos de la flotilla.'));
+  } catch (e) { fill(body, errorBox(e)); }
+}
+
+async function documentosView() {
+  const body = h('div', {}, loading());
+  screen('Mis documentos', body, { back: () => go(state.tab || 'mas') });
+  try {
+    const l = await api('documentos');
+    fill(body, l.length ? h('div', { class: 'menu' }, l.map(d => h('button', { class: 'mi', onclick: async () => {
+      try { openBase64(await busy('Abriendo…', () => api('documento', { id: d.id }))); } catch (e) { toast(e.message, 'error'); }
+    } }, h('span', { class: 'mi-i' }, /pdf/.test(d.mime) ? '📕' : /image/.test(d.mime) ? '🖼️' : '📄'), h('span', { class: 'mi-t' }, h('strong', {}, d.nombre), h('small', { class: 'muted' }, `${fecha(d.fecha)} · ${Math.max(1, Math.round(d.tamano / 1024))} KB`)), h('span', { class: 'chev' }, '⬇︎'))))
+      : empty('📂', 'RH aún no ha subido documentos a tu expediente.'));
+  } catch (e) { fill(body, errorBox(e)); }
+}
+
+async function cambiarPin() {
+  const actual = await pinModal('Cambiar PIN', 'Escribe tu PIN actual');
+  if (!actual) return;
+  const nuevo = await pinModal('Nuevo PIN', 'Escribe tu nuevo PIN de 6 dígitos');
+  if (!nuevo) return;
+  const rep = await pinModal('Confirma tu nuevo PIN', 'Escríbelo otra vez');
+  if (rep !== nuevo) return toast('Los PIN no coinciden', 'warn');
+  try { const s = await busy('Guardando…', () => api('cambiarPin', { actual, nuevo })); session.set(s.token, s.usuario); toast('PIN actualizado', 'ok'); } catch (e) { toast(e.message, 'error'); }
+}
+
+async function bandeja() {
+  const prev = state.tab;
+  const body = h('div', {}, loading());
+  screen('Notificaciones', body, { back: () => go(prev) });
+  try {
+    const l = await api('bandeja');
+    const ICON = { recibo: '🧾', pago: '💸', solicitud: '📝', aviso: '📢', adeudo: '💳', documento: '📄', alerta: '⚠️' };
+    fill(body,
+      l.some(n => !n.leido) && h('div', { class: 'row', style: 'justify-content:flex-end' }, h('button', { class: 'link', onclick: async () => { await api('marcarLeido', { todos: true }); setBadge(0); bandeja(); } }, 'Marcar todo como leído')),
+      l.length ? l.map(n => h('button', { class: 'card tap notif' + (n.leido ? '' : ' unread'), onclick: async () => {
+        if (!n.leido) { api('marcarLeido', { ids: [n.notif_id] }).catch(() => {}); setBadge(Math.max(0, state.noLeidos - 1)); }
+        if (n.tipo === 'recibo' && n.ref) return reciboView(n.ref, () => bandeja());
+        if (n.tipo === 'pago') return go('nomina', 'pagos');
+        if (n.tipo === 'solicitud') return go(modoPatron() ? 'pmas' : 'solicitudes');
+        if (n.tipo === 'documento') return documentosView();
+        if (n.tipo === 'adeudo') return adeudosView();
+        n.leido = true; bandeja();
+      } }, h('span', { class: 'n-i' }, ICON[n.tipo] || '🔔'),
+        h('span', { class: 'n-b' }, h('strong', {}, String(n.titulo).replace(/^\p{Extended_Pictographic}\uFE0F?\s*/u, '')), h('span', { class: 'small' }, n.mensaje), h('span', { class: 'muted tiny' }, fechaHora(n.fecha)))))
+        : empty('🔕', 'No tienes notificaciones.'));
+  } catch (e) { fill(body, errorBox(e)); }
+}
+function setBadge(n) {
+  state.noLeidos = n || 0;
+  const b = document.querySelector('.bell');
+  if (b) fill(b, '🔔', state.noLeidos ? h('span', { class: 'dot' }, state.noLeidos > 9 ? '9+' : state.noLeidos) : null);
+  if (navigator.setAppBadge) (state.noLeidos ? navigator.setAppBadge(state.noLeidos) : navigator.clearAppBadge()).catch(() => {});
+}
+
+// ═════════════════════ PATRÓN ═════════════════════
+
+VIEWS.panel = async function panel() {
+  const body = h('div', {}, h('p', { class: 'muted cap' }, hoyLargo()), loading());
+  screen('Panel', body, { actions: h('button', { class: 'icon-btn', 'aria-label': 'Actualizar', onclick: () => panel() }, '↻') });
+  let d;
+  try { d = await api('panel'); } catch (e) { return fill(body, errorBox(e, panel)); }
+  const hr = d.hoy_resumen, q = d.quincena, n = d.nomina, df = d.datos_faltantes;
+  const faltan = [df.sin_rfc && `${df.sin_rfc} sin RFC`, df.sin_clabe && `${df.sin_clabe} sin CLABE`, df.sin_salario && `${df.sin_salario} sin salario`, df.sin_horario && `${df.sin_horario} sin horario en checador`].filter(Boolean);
+  fill(body,
+    h('p', { class: 'muted cap' }, hoyLargo()),
+    faltan.length > 0 && h('button', { class: 'banner action warn', onclick: () => go('personal', 'incompletos') }, h('strong', {}, 'Completa los expedientes'), h('span', {}, faltan.join(' · ') + ' →')),
+    d.solicitudes_pendientes > 0 && h('button', { class: 'banner action info', onclick: () => solicitudesAdmin() }, h('strong', {}, `📝 ${d.solicitudes_pendientes} solicitud(es) por resolver`), h('span', {}, 'Revisar →')),
+    n.pagos_no_cuadran > 0 && h('button', { class: 'banner action error', onclick: () => go('pnomina', 'pagos') }, h('strong', {}, `⚠️ ${n.pagos_no_cuadran} depósito(s) no cuadran con su recibo`), h('span', {}, 'Revisar →')),
+
+    section('Hoy'),
+    h('div', { class: 'kpis' },
+      kpi('Presentes', `${hr.presentes}/${hr.esperados}`, 'checaron entrada', hr.presentes < hr.esperados ? 'warn' : 'ok'),
+      kpi('Llegaron tarde', hr.tarde, 'tolerancia 0', hr.tarde ? 'warn' : ''),
+      kpi('Sin checar', hr.faltan.length, 'de los esperados', hr.faltan.length ? 'err' : ''),
+      kpi('Con push', `${d.con_push}/${d.total_personal}`, 'empleados con avisos')),
+    hr.faltan.length > 0 && h('div', { class: 'card' }, h('h3', { class: 'small muted' }, 'SIN CHECAR'), h('div', { class: 'chips wrap' }, hr.faltan.map(f => h('span', { class: 'chip' }, `${f.nombre} · ${f.debia}`)))),
+    hr.llegadas.length > 0 && h('details', { class: 'card' }, h('summary', {}, `Llegadas de hoy (${hr.llegadas.length})`),
+      hr.llegadas.map(l => h('div', { class: 'kv' }, h('span', {}, l.nombre), h('strong', { class: l.min_tarde ? 'late' : 'ok-t' }, l.entrada + (l.min_tarde ? ` (+${l.min_tarde})` : ''))))),
+
+    section(d.periodo.etiqueta),
+    h('button', { class: 'kpis plain', onclick: () => go('equipo') },
+      kpi('Retardos', q.retardos, `${num(q.horas_retraso, 2)} h acumuladas`, q.retardos ? 'warn' : ''),
+      kpi('Faltas', q.faltas, 'sin justificar', q.faltas ? 'err' : ''),
+      kpi('Recibos emitidos', n.recibos_periodo, 'esta quincena'),
+      kpi('Anterior', n.recibos_periodo_anterior, d.periodo_anterior.etiqueta)),
+    q.top.length > 0 && h('div', { class: 'card' }, h('h3', { class: 'small muted' }, 'MÁS DESCUENTOS EN LA QUINCENA'),
+      q.top.map(t => h('div', { class: 'kv' }, h('span', {}, t.nombre), h('strong', { class: 'late' }, [t.faltas && `${t.faltas} falta(s)`, t.min_total && hm(t.min_total) + ' tarde'].filter(Boolean).join(' · '))))),
+
+    section('Nómina'),
+    h('div', { class: 'kpis' },
+      kpi('Sin firmar', n.sin_firmar, 'recibos', n.sin_firmar ? 'warn' : 'ok'),
+      kpi('Sin pagar', n.sin_pagar, 'recibos emitidos', n.sin_pagar ? 'warn' : 'ok'),
+      kpi('Pagado 7 días', money0(n.pagos_semana), 'detectado en Fondeadora'),
+      kpi('Expedientes', `${d.total_personal - df.sin_pin}/${d.total_personal}`, 'con acceso al portal')),
+    h('div', { class: 'quick' },
+      h('button', { class: 'q', onclick: () => go('pnomina', 'prenomina') }, h('span', {}, '🧮'), 'Prenómina'),
+      h('button', { class: 'q', onclick: () => enviarAvisoView() }, h('span', {}, '📢'), 'Enviar aviso'),
+      h('button', { class: 'q', onclick: () => solicitudesAdmin() }, h('span', {}, '📝'), 'Solicitudes'),
+      h('button', { class: 'q', onclick: () => adeudosAdmin() }, h('span', {}, '💳'), 'Adeudos')),
+    pushCard(),
+  );
+};
+
+VIEWS.equipo = async function equipo(periodo) {
+  periodo = periodo || periodoDe(new Date());
+  const body = h('div', {}, loading());
+  screen('Asistencia del equipo', body);
+  let d;
+  try { d = await api('asistenciaGeneral', { periodo }); } catch (e) { return fill(body, errorBox(e)); }
+  const tot = d.empleados.reduce((a, e) => ({ f: a.f + e.totales.faltas, m: a.m + e.totales.min_total, j: a.j + e.totales.justificadas }), { f: 0, m: 0, j: 0 });
+  fill(body,
+    periodoPicker(periodo, p => VIEWS.equipo(p)),
+    h('div', { class: 'kpis' }, kpi('Faltas', tot.f, `${tot.j} justificadas`, tot.f ? 'err' : ''), kpi('Retraso total', hm(tot.m) + ' h', 'entrada + comida', tot.m ? 'warn' : '')),
+    section('Por empleado · toca para ver el detalle'),
+    table([
+      { t: 'Empleado', f: e => h('div', {}, h('strong', {}, e.nombre), h('div', { class: 'muted tiny' }, e.sin_horario ? '⚠️ sin horario' : e.hoy ? (e.hoy.entrada ? `hoy ${e.hoy.entrada}` + (e.hoy.min_tarde ? ` (+${e.hoy.min_tarde})` : '') : e.hoy.laboral ? 'hoy sin checar' : 'hoy descansa') : '')) },
+      { t: 'Faltas', cls: 'num', f: e => e.totales.faltas || '—' },
+      { t: 'Tarde', cls: 'num', f: e => e.totales.min_tarde ? hm(e.totales.min_tarde) : '—' },
+      { t: 'Comida', cls: 'num', f: e => e.totales.min_comida_extra ? hm(e.totales.min_comida_extra) : '—' },
+      { t: 'Desc. h', cls: 'num', f: e => e.totales.horas_descuento ? h('strong', { class: 'late' }, num(e.totales.horas_descuento, 2)) : '—' },
+    ], d.empleados, e => { state.tab = 'equipo'; VIEWS.asistencia(periodo, e.no_empleado, e.nombre); }),
+    h('p', { class: 'muted small' }, 'Mismas reglas que el dashboard del checador: tolerancia 0, minutos de entrada tarde + minutos extra de comida, cada falta vale 8 h. Las justificadas se toman de la pestaña Justificadas.'));
+};
+
+VIEWS.pnomina = async function pnomina(tab = 'prenomina', periodo) {
+  state.tab = 'pnomina';
+  const now = new Date();
+  // Por defecto: la quincena que está por cerrar (desde el día 13 / 28) o la anterior
+  periodo = periodo || (now.getDate() >= 13 && now.getDate() <= 15 || now.getDate() >= 28 ? periodoDe(now) : periodoMover(periodoDe(now), -1));
+  const body = h('div', {}, segmented([['prenomina', 'Prenómina'], ['recibos', 'Recibos'], ['pagos', 'Pagos']], tab, t => VIEWS.pnomina(t, periodo)), loading());
+  screen('Nómina', body);
+  const head = body.firstChild;
+  try {
+    if (tab === 'prenomina') await prenominaView(body, head, periodo);
+    else if (tab === 'recibos') await recibosAdminView(body, head, periodo);
+    else await pagosAdminView(body, head);
+  } catch (e) { fill(body, head, errorBox(e)); }
+};
+
+async function prenominaView(body, head, periodo) {
+  const d = await api('prenomina', { periodo });
+  const filas = d.filas.map(f => ({ ...f, incluir: !f.recibo_existente && !f.sin_salario }));
+  const totalBox = h('div', { class: 'sticky-total' });
+  const calc = f => {
+    const n = k => Number(f[k] || 0);
+    f.total_percepciones = n('sueldo') + n('bonos') + n('otras_percepciones');
+    f.total_deducciones = n('desc_faltas') + n('desc_retardos') + n('desc_cargos') + n('desc_adeudos') + n('otras_deducciones');
+    f.neto = Math.max(0, Math.round((f.total_percepciones - f.total_deducciones) * 100) / 100);
+  };
+  const drawTotal = () => {
+    const sel = filas.filter(f => f.incluir);
+    fill(totalBox, h('div', {}, h('strong', {}, `${sel.length} recibo(s)`), h('span', { class: 'muted small' }, ' · neto ' + money(sel.reduce((s, f) => s + f.neto, 0)))),
+      h('button', { class: 'btn primary', disabled: !sel.length, onclick: emitir }, 'Emitir'));
+  };
+  const field = (f, k, label, netoEl) => {
+    const inp = h('input', { class: 'input sm num', type: 'number', inputmode: 'decimal', step: '0.01', value: f[k] || '' , placeholder: '0' });
+    inp.addEventListener('input', () => { f[k] = Number(inp.value || 0); calc(f); fill(netoEl, money(f.neto)); drawTotal(); });
+    return h('label', { class: 'pf' }, h('span', {}, label), inp);
+  };
+  const card = f => {
+    const netoEl = h('strong', { class: 'amount big' }, money(f.neto));
+    const chk = h('input', { type: 'checkbox', checked: f.incluir || null });
+    chk.addEventListener('change', () => { f.incluir = chk.checked; c.classList.toggle('off', !f.incluir); drawTotal(); });
+    const a = f.asistencia;
+    const notas = h('input', { class: 'input sm', placeholder: 'Nota para el recibo (opcional)', value: f.notas || '' });
+    notas.addEventListener('input', () => f.notas = notas.value);
+    const cb = h('input', { class: 'input sm', placeholder: 'Concepto del bono', value: f.concepto_bonos || '' });
+    cb.addEventListener('input', () => f.concepto_bonos = cb.value);
+    const c = h('div', { class: 'card pre' + (f.incluir ? '' : ' off') },
+      h('div', { class: 'row between' },
+        h('label', { class: 'row', style: 'gap:10px' }, chk, h('div', {}, h('h3', {}, f.nombre), h('span', { class: 'muted tiny' }, `No. ${f.no_empleado} · ${money(f.salario_diario)}/día${f.puesto ? ' · ' + f.puesto : ''}`))),
+        netoEl),
+      h('div', { class: 'row wrap gap4', style: 'margin:6px 0' },
+        f.recibo_existente && h('span', { class: 'badge b-info' }, `Ya emitido ${f.recibo_existente.recibo_id} · ${money(f.recibo_existente.neto)}`),
+        f.sin_salario && h('span', { class: 'badge b-err' }, 'Sin salario'), f.sin_clabe && h('span', { class: 'badge b-warn' }, 'Sin CLABE'),
+        f.sin_horario && h('span', { class: 'badge b-warn' }, 'Sin horario'),
+        h('span', { class: 'badge' }, `${a.faltas} falta(s) · ${hm(a.min_total)} tarde`)),
+      h('details', {}, h('summary', { class: 'small' }, 'Editar importes'),
+        h('div', { class: 'pgrid' },
+          field(f, 'sueldo', 'Sueldo', netoEl), field(f, 'bonos', 'Bonos', netoEl), field(f, 'otras_percepciones', 'Otras percep.', netoEl),
+          field(f, 'desc_faltas', `Faltas (${a.faltas})`, netoEl), field(f, 'desc_retardos', `Retardos (${hm(a.min_total)})`, netoEl),
+          field(f, 'desc_cargos', `Flotilla (${f.cargos.length})`, netoEl), field(f, 'desc_adeudos', `Adeudos (${f.abonos.length})`, netoEl), field(f, 'otras_deducciones', 'Otras deduc.', netoEl)),
+        cb, notas,
+        f.cargos.length > 0 && h('p', { class: 'muted tiny' }, 'Cargos: ' + f.cargos.map(x => `${x.vehiculo_id} ${x.descripcion} ${money(x.monto)}`).join(' · ')),
+        f.abonos.length > 0 && h('p', { class: 'muted tiny' }, 'Abonos: ' + f.abonos.map(x => `${x.concepto} ${money(x.monto)} (saldo ${money(x.saldo)})`).join(' · '))));
+    return c;
+  };
+  const emitir = async () => {
+    const sel = filas.filter(f => f.incluir);
+    const reemplazo = sel.some(f => f.recibo_existente);
+    if (!await confirmar('Emitir recibos', `Se generan ${sel.length} recibo(s) de la ${d.periodo.etiqueta} por ${money(sel.reduce((s, f) => s + f.neto, 0))} en total. Cada empleado recibe un aviso para revisarlo y firmarlo.${reemplazo ? ' Los recibos ya emitidos que marcaste se cancelan y se reemplazan.' : ''}`, 'Emitir')) return;
+    try {
+      const r = await busy('Generando recibos…', () => api('emitirRecibos', { periodo, filas: sel, reemplazar: reemplazo }));
+      toast(`${r.emitidos} recibo(s) emitidos`, 'ok');
+      VIEWS.pnomina('recibos', periodo);
+    } catch (e) { toast(e.message, 'error', 6000); }
+  };
+  fill(body, head, periodoPicker(periodo, p => VIEWS.pnomina('prenomina', p)),
+    h('p', { class: 'muted small' }, 'Calculado con la asistencia del checador, los cargos de la flotilla y los adeudos activos. Revisa, ajusta y emite.'),
+    filas.map(card), totalBox);
+  drawTotal();
+}
+
+async function recibosAdminView(body, head, periodo) {
+  const l = await api('recibosAdmin', { periodo });
+  const vivos = l.filter(r => r.estatus !== 'cancelado');
+  fill(body, head, periodoPicker(periodo, p => VIEWS.pnomina('recibos', p)),
+    h('div', { class: 'kpis' }, kpi('Recibos', vivos.length, money0(vivos.reduce((s, r) => s + r.neto, 0)) + ' neto'),
+      kpi('Firmados', `${vivos.filter(r => r.firma_fecha).length}/${vivos.length}`, 'por los empleados'),
+      kpi('Pagados', `${vivos.filter(r => r.estatus === 'pagado').length}/${vivos.length}`, 'match con Fondeadora')),
+    l.length ? table([
+      { t: 'Empleado', f: r => h('div', {}, h('strong', {}, r.nombre), h('div', { class: 'muted tiny' }, r.recibo_id)) },
+      { t: 'Neto', cls: 'num', f: r => money(r.neto) },
+      { t: 'Estado', f: r => reciboBadges(r) },
+    ], l, r => reciboView(r.recibo_id, () => VIEWS.pnomina('recibos', periodo))) : empty('🧾', 'Sin recibos en esta quincena. Genéralos desde Prenómina.'));
+}
+
+async function pagosAdminView(body, head) {
+  const l = await api('pagosAdmin', {});
+  const CU = { SI: ['Cuadra', 'ok'], NO: ['No cuadra', 'err'], 'SIN RECIBO': ['Sin recibo', 'muted'], MANUAL: ['Ligado a mano', 'info'] };
+  fill(body, head,
+    h('div', { class: 'row wrap', style: 'gap:8px;margin-bottom:12px' },
+      h('button', { class: 'btn sm', onclick: async () => {
+        try { const r = await busy('Revisando correos de Fondeadora…', () => api('revisarAhora')); toast(`${r.pagos_nuevos} pago(s) nuevo(s) de ${r.revisados} correo(s)`, 'ok'); VIEWS.pnomina('pagos'); } catch (e) { toast(e.message, 'error'); }
+      } }, '↻ Revisar correos ahora'),
+      h('button', { class: 'btn sm', onclick: pagoManualView }, '＋ Pago manual')),
+    h('p', { class: 'muted small' }, 'Cada 5 minutos se leen los correos "Transferencia exitosa" de Fondeadora; si la CLABE destino es de un empleado se registra aquí y se le avisa por push.'),
+    l.length ? l.map(p => {
+      const [cl, cc] = CU[p.cuadra] || [p.cuadra, 'muted'];
+      return h('div', { class: 'card pay' },
+        h('div', { class: 'row between' }, h('div', {}, h('h3', {}, p.nombre), h('span', { class: 'muted small cap' }, p.concepto)), h('strong', { class: 'amount' }, money(p.monto))),
+        h('div', { class: 'row between small', style: 'margin-top:6px' }, h('span', { class: 'row gap4' }, h('span', { class: 'badge b-' + cc }, cl), p.recibo_id && h('span', { class: 'muted' }, p.recibo_id)),
+          h('span', { class: 'muted' }, fechaHora(p.fecha))),
+        p.cuadra !== 'SI' && h('button', { class: 'link', onclick: () => ligarPago(p) }, p.recibo_id ? 'Cambiar recibo' : 'Ligar a un recibo'));
+    }) : empty('💸', 'Sin pagos a empleados en los últimos 45 días.'));
+}
+
+async function ligarPago(p) {
+  const recibos = (await busy('Cargando…', () => api('recibosAdmin', {}))).filter(r => r.no_empleado === p.no_empleado && r.estatus !== 'cancelado');
+  const sel = h('select', { class: 'input' }, h('option', { value: '' }, '— Sin recibo —'),
+    recibos.map(r => h('option', { value: r.recibo_id, selected: r.recibo_id === p.recibo_id || null }, `${r.recibo_id} · ${r.etiqueta} · ${money(r.neto)}${r.estatus === 'pagado' && r.pago_id !== p.pago_id ? ' (ya pagado)' : ''}`)));
+  const ok = await modal(`Depósito de ${money(p.monto)}`, h('div', {}, h('p', { class: 'muted' }, `${p.nombre} · ${p.concepto}`), sel), [['Cancelar', false], ['Guardar', true, 'primary']]);
+  if (!ok) return;
+  try { await busy('Guardando…', () => api('asignarPago', { pago_id: p.pago_id, recibo_id: sel.value })); toast('Listo', 'ok'); VIEWS.pnomina('pagos'); } catch (e) { toast(e.message, 'error'); }
+}
+
+async function pagoManualView() {
+  const personas = (await busy('Cargando…', () => api('personal'))).filter(p => p.estatus !== 'baja');
+  const sel = h('select', { class: 'input' }, personas.map(p => h('option', { value: p.no_empleado }, `${p.nombre} (No. ${p.no_empleado})`)));
+  const monto = h('input', { class: 'input', type: 'number', inputmode: 'decimal', placeholder: 'Monto' });
+  const concepto = h('input', { class: 'input', placeholder: 'Concepto (ej. nómina en efectivo)', value: 'Nómina en efectivo' });
+  const ok = await modal('Registrar pago manual', h('div', {}, h('p', { class: 'muted small' }, 'Para pagos que no salieron por Fondeadora (efectivo u otra cuenta). Si coincide con un recibo pendiente se marca como pagado.'), sel, monto, concepto), [['Cancelar', false], ['Registrar', true, 'primary']]);
+  if (!ok) return;
+  try { await busy('Guardando…', () => api('pagoManual', { no_empleado: sel.value, monto: monto.value, concepto: concepto.value })); toast('Pago registrado', 'ok'); VIEWS.pnomina('pagos'); } catch (e) { toast(e.message, 'error'); }
+}
+
+VIEWS.personal = async function personal(filtro = 'activos', q = '') {
+  const body = h('div', {}, loading());
+  screen('Personal', body, { actions: h('button', { class: 'icon-btn', 'aria-label': 'Nuevo', onclick: () => personaView(null) }, '＋') });
+  let l;
+  try { l = await api('personal'); } catch (e) { return fill(body, errorBox(e)); }
+  const incompleto = p => !p.rfc || !p.clabe || !p.salario_diario || !p.horario?.entrada;
+  const search = h('input', { class: 'input', type: 'search', placeholder: 'Buscar por nombre o número', value: q });
+  const list = h('div');
+  const draw = () => {
+    const s = search.value.trim().toLowerCase();
+    const r = l.filter(p => (filtro === 'activos' ? p.estatus !== 'baja' : filtro === 'incompletos' ? p.estatus !== 'baja' && incompleto(p) : filtro === 'bajas' ? p.estatus === 'baja' : true)
+      && (!s || p.nombre.toLowerCase().includes(s) || p.no_empleado === s));
+    fill(list, r.length ? r.map(p => h('button', { class: 'card tap person', onclick: () => personaView(p) },
+      h('div', { class: 'avatar sm' + (p.estatus === 'baja' ? ' off' : '') }, iniciales(p.nombre)),
+      h('div', { class: 'grow' }, h('strong', {}, p.nombre), h('div', { class: 'muted tiny' }, `No. ${p.no_empleado}${p.puesto ? ' · ' + p.puesto : ''}${p.rol === 'admin' ? ' · admin' : ''}`),
+        h('div', { class: 'row wrap gap4', style: 'margin-top:4px' },
+          !p.rfc && h('span', { class: 'badge b-warn' }, 'Sin RFC'), !p.clabe && h('span', { class: 'badge b-warn' }, 'Sin CLABE'),
+          !p.salario_diario && h('span', { class: 'badge b-warn' }, 'Sin salario'), !p.horario?.entrada && h('span', { class: 'badge b-warn' }, 'Sin horario'),
+          p.bloqueado ? h('span', { class: 'badge b-err' }, 'Bloqueado') : p.tiene_pin ? h('span', { class: 'badge b-ok' }, 'Con acceso') : h('span', { class: 'badge' }, 'Sin acceso'),
+          p.push && h('span', { class: 'badge b-info' }, '🔔'))),
+      h('span', { class: 'chev' }, '›'))) : empty('👥', 'Nadie en este filtro.'));
+  };
+  search.addEventListener('input', draw);
+  fill(body, h('div', { class: 'chips' }, [['activos', 'Activos'], ['incompletos', `Incompletos (${l.filter(p => p.estatus !== 'baja' && incompleto(p)).length})`], ['bajas', 'Bajas'], ['todos', 'Todos']].map(([k, t]) =>
+    h('button', { class: 'chip ' + (filtro === k ? 'on' : ''), onclick: () => VIEWS.personal(k, search.value) }, t))), search, list,
+    h('p', { class: 'muted small' }, 'Los empleados nuevos del checador aparecen aquí solos (cada hora). Horario y celular se editan en el kiosco del checador.'));
+  draw();
+};
+
+async function personaView(p) {
+  const nuevo = !p;
+  p = p || { estatus: 'activo', rol: 'empleado' };
+  const f = {};
+  const inp = (k, label, attrs = {}) => { f[k] = h('input', { class: 'input', value: p[k] ?? '', ...attrs }); return h('div', {}, h('label', { class: 'label' }, label), f[k]); };
+  const sel = (k, label, ops) => { f[k] = h('select', { class: 'input' }, ops.map(([v, t]) => h('option', { value: v, selected: p[k] === v || null }, t))); return h('div', {}, h('label', { class: 'label' }, label), f[k]); };
+  const body = h('div', {},
+    !nuevo && h('div', { class: 'card row', style: 'gap:12px' }, h('div', { class: 'avatar' }, iniciales(p.nombre)),
+      h('div', { class: 'grow' }, h('h3', {}, p.nombre), h('p', { class: 'muted small' }, p.tiene_pin ? `Último acceso ${p.ultimo_acceso ? fechaHora(p.ultimo_acceso) : '—'}` : 'Aún no entra al portal'),
+        p.horario && h('p', { class: 'muted tiny' }, `Checador: entrada ${p.horario.entrada || '—'} · ${p.horario.dias || 'sin días'} · celular ${p.celular_checador ? '✓' : '✗'}`))),
+    !nuevo && h('div', { class: 'quick' },
+      h('button', { class: 'q', onclick: () => { state.tab = 'personal'; VIEWS.asistencia(null, p.no_empleado, p.nombre); } }, h('span', {}, '⏱️'), 'Asistencia'),
+      h('button', { class: 'q', onclick: () => subirDoc(p) }, h('span', {}, '📤'), 'Subir doc.'),
+      h('button', { class: 'q', onclick: () => nuevoAdeudo(p) }, h('span', {}, '💳'), 'Adeudo'),
+      h('button', { class: 'q', disabled: !p.tiene_pin && !p.bloqueado, onclick: async () => {
+        if (!await confirmar('Reiniciar PIN', `${p.nombre} volverá a crear su PIN con su RFC y número de empleado. Se cierran sus sesiones.`, 'Reiniciar')) return;
+        try { await busy('Reiniciando…', () => api('resetPin', { no_empleado: p.no_empleado })); toast('PIN reiniciado', 'ok'); go('personal'); } catch (e) { toast(e.message, 'error'); }
+      } }, h('span', {}, '🔑'), 'Reset PIN')),
+    section('Identificación'),
+    nuevo && inp('no_empleado', 'No. de empleado', { inputmode: 'numeric' }),
+    inp('nombre', 'Nombre completo'),
+    h('div', { class: 'grid2' }, inp('rfc', 'RFC', { autocapitalize: 'characters', maxlength: 13, class: 'input mono' }), inp('curp', 'CURP', { autocapitalize: 'characters', maxlength: 18, class: 'input mono' })),
+    h('div', { class: 'grid2' }, inp('nss', 'NSS', { inputmode: 'numeric', maxlength: 11 }), inp('telefono', 'Teléfono', { inputmode: 'tel' })),
+    inp('correo', 'Correo', { type: 'email' }),
+    section('Puesto y nómina'),
+    h('div', { class: 'grid2' }, inp('puesto', 'Puesto'), inp('area', 'Área')),
+    h('div', { class: 'grid2' }, inp('fecha_ingreso', 'Fecha de ingreso', { type: 'date' }), inp('salario_diario', 'Salario diario', { type: 'number', inputmode: 'decimal', step: '0.01' })),
+    h('div', { class: 'grid2' }, inp('clabe', 'CLABE (18 dígitos)', { inputmode: 'numeric', maxlength: 18, class: 'input mono' }), inp('banco', 'Banco')),
+    h('p', { class: 'muted tiny' }, 'Con la CLABE se reconocen sus depósitos de Fondeadora automáticamente.'),
+    inp('flotilla_id', 'ID en la flotilla (ej. U-004)', { autocapitalize: 'characters' }),
+    section('Acceso'),
+    h('div', { class: 'grid2' }, sel('rol', 'Rol', [['empleado', 'Empleado'], ['admin', 'Patrón / admin']]), sel('estatus', 'Estatus', [['activo', 'Activo'], ['baja', 'Baja']])),
+    inp('fecha_baja', 'Fecha de baja', { type: 'date' }),
+    h('label', { class: 'label' }, 'Notas internas'), (f.notas = h('textarea', { class: 'input', rows: 2 }, p.notas || '')),
+    h('button', { class: 'btn primary block', onclick: async () => {
+      const persona = { no_empleado: nuevo ? f.no_empleado.value.trim() : p.no_empleado };
+      Object.keys(f).forEach(k => { if (k !== 'no_empleado') persona[k] = f[k].value; });
+      try { await busy('Guardando…', () => api('guardarPersona', { persona })); toast('Guardado', 'ok'); go('personal'); } catch (e) { toast(e.message, 'error', 5000); }
+    } }, 'Guardar'));
+  screen(nuevo ? 'Nuevo empleado' : 'Expediente', body, { back: () => go('personal') });
+}
+
+async function subirDoc(p) {
+  const file = await pickFile('*/*');
+  if (!file) return;
+  const nombre = h('input', { class: 'input', value: file.name });
+  const avisar = h('input', { type: 'checkbox', checked: true });
+  const ok = await modal('Subir al expediente', h('div', {}, h('p', { class: 'muted small' }, `Para ${p.nombre}. El empleado lo podrá ver y descargar en "Mis documentos".`), nombre,
+    h('label', { class: 'row small' }, avisar, ' Avisarle por notificación')), [['Cancelar', false], ['Subir', true, 'primary']]);
+  if (!ok) return;
+  try {
+    const f = await readFile(file);
+    await busy('Subiendo…', () => api('subirDocumento', { no_empleado: p.no_empleado, nombre: nombre.value || f.name, base64: f.base64, mime: f.mime, avisar: avisar.checked }));
+    toast('Documento subido', 'ok');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function nuevoAdeudo(p) {
+  const personas = p ? null : (await busy('Cargando…', () => api('personal'))).filter(x => x.estatus !== 'baja');
+  const who = p ? null : h('select', { class: 'input' }, personas.map(x => h('option', { value: x.no_empleado }, x.nombre)));
+  const concepto = h('input', { class: 'input', placeholder: 'Concepto (ej. préstamo, herramienta, uniforme)', value: 'Préstamo' });
+  const monto = h('input', { class: 'input', type: 'number', inputmode: 'decimal', placeholder: 'Monto total' });
+  const cuota = h('input', { class: 'input', type: 'number', inputmode: 'decimal', placeholder: 'Descuento por quincena' });
+  const ok = await modal('Nuevo adeudo' + (p ? ' · ' + primerNombre(p.nombre) : ''), h('div', {}, who, concepto, monto, cuota,
+    h('p', { class: 'muted small' }, 'Se descuenta en cada prenómina hasta liquidarlo. Al empleado le llega un aviso.')), [['Cancelar', false], ['Guardar', true, 'primary']]);
+  if (!ok) return;
+  try { await busy('Guardando…', () => api('guardarAdeudo', { no_empleado: p ? p.no_empleado : who.value, concepto: concepto.value, monto_total: monto.value, cuota: cuota.value })); toast('Adeudo registrado', 'ok'); if (!p) adeudosAdmin(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+
+VIEWS.pmas = function pmas() {
+  const u = session.user;
+  screen('Más', h('div', {},
+    h('div', { class: 'card row', style: 'gap:12px' }, h('div', { class: 'avatar' }, iniciales(u.nombre)), h('div', {}, h('h3', {}, u.nombre), h('p', { class: 'muted small' }, 'Modo patrón'))),
+    h('button', { class: 'card tap row between switch emp', onclick: () => { session.modo = 'empleado'; start(); } },
+      h('div', {}, h('h3', {}, '👤 Ver mi portal de empleado'), h('p', { class: 'muted small' }, 'Tu asistencia, tus recibos y depósitos')), h('span', { class: 'chev' }, '›')),
+    menu([
+      ['📝', 'Solicitudes', 'Justificantes, vacaciones, permisos, anticipos', () => solicitudesAdmin()],
+      ['📢', 'Avisos', 'Comunicados por notificación', enviarAvisoView],
+      ['💳', 'Adeudos y cargos', 'Préstamos y cargos de flotilla', () => adeudosAdmin()],
+      ['🔔', 'Mis notificaciones', '', () => bandeja()],
+      ['🔑', 'Cambiar PIN', '', cambiarPin],
+    ]),
+    pushCard(),
+    h('button', { class: 'btn danger-o block', onclick: () => { session.clear(); location.reload(); } }, 'Cerrar sesión'),
+    h('p', { class: 'muted small center' }, 'Portal Packatelas · v' + (window.APP_VERSION || '1'))));
+};
+
+async function solicitudesAdmin(estatus = 'pendiente') {
+  state.tab = 'pmas';
+  const body = h('div', {}, loading());
+  screen('Solicitudes', body, { back: () => go('pmas') });
+  try {
+    const l = await api('solicitudesAdmin', { estatus: estatus === 'todas' ? '' : estatus });
+    fill(body, h('div', { class: 'chips' }, [['pendiente', 'Pendientes'], ['aprobada', 'Aprobadas'], ['rechazada', 'Rechazadas'], ['todas', 'Todas']].map(([k, t]) =>
+      h('button', { class: 'chip ' + (estatus === k ? 'on' : ''), onclick: () => solicitudesAdmin(k) }, t))),
+      l.length ? l.map(s => solCard(s, s.estatus === 'pendiente' && h('div', { class: 'row', style: 'margin-top:10px' },
+        s.evidencia && h('a', { class: 'btn sm', href: 'https://drive.google.com/file/d/' + s.evidencia + '/view', target: '_blank', rel: 'noopener' }, '📎 Evidencia'),
+        h('button', { class: 'btn sm danger-o', onclick: () => resolver(s, false) }, 'Rechazar'),
+        h('button', { class: 'btn sm primary', onclick: () => resolver(s, true) }, 'Aprobar')))) : empty('✅', 'Nada pendiente.'));
+  } catch (e) { fill(body, errorBox(e)); }
+}
+
+async function resolver(s, aprobar) {
+  const com = h('textarea', { class: 'input', rows: 2, placeholder: 'Comentario para el empleado (opcional)' });
+  const cuota = h('input', { class: 'input', type: 'number', inputmode: 'decimal', placeholder: 'Descuento por quincena', value: s.monto || '' });
+  const extra = aprobar && ['justificante', 'vacaciones', 'permiso'].includes(s.tipo) ? h('p', { class: 'muted small' }, 'Se agrega a la pestaña Justificadas del checador: esos días no cuentan como falta.')
+    : aprobar && s.tipo === 'anticipo' ? h('div', {}, h('p', { class: 'muted small' }, 'Se crea un adeudo que se descuenta en la prenómina.'), cuota) : null;
+  const ok = await modal((aprobar ? 'Aprobar' : 'Rechazar') + ' · ' + s.tipo_txt, h('div', {}, h('p', {}, `${s.nombre}${s.fecha_desde ? ' · ' + fecha(s.fecha_desde) : ''}${s.monto ? ' · ' + money(s.monto) : ''}`), extra, com),
+    [['Cancelar', false], [aprobar ? 'Aprobar' : 'Rechazar', true, aprobar ? 'primary' : 'danger']]);
+  if (!ok) return;
+  try { await busy('Guardando…', () => api('resolverSolicitud', { sol_id: s.sol_id, aprobar, comentario: com.value, cuota: cuota.value })); toast(aprobar ? 'Aprobada' : 'Rechazada', 'ok'); solicitudesAdmin(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+
+async function enviarAvisoView() {
+  state.tab = 'pmas';
+  const body = h('div', {}, loading());
+  screen('Avisos', body, { back: () => go('pmas') });
+  let personas, hist;
+  try { [personas, hist] = await Promise.all([api('personal'), api('avisosEnviados')]); } catch (e) { return fill(body, errorBox(e)); }
+  personas = personas.filter(p => p.estatus !== 'baja');
+  const titulo = h('input', { class: 'input', placeholder: 'Título (ej. Junta el lunes)', maxlength: 60 });
+  const msg = h('textarea', { class: 'input', rows: 3, placeholder: 'Mensaje' });
+  const marcados = new Set();
+  const todos = h('input', { type: 'checkbox', checked: true });
+  const lista = h('div', { class: 'chips wrap hidden' }, personas.map(p => {
+    const c = h('button', { class: 'chip', onclick: () => { marcados.has(p.no_empleado) ? marcados.delete(p.no_empleado) : marcados.add(p.no_empleado); c.classList.toggle('on'); } }, primerNombre(p.nombre) + (p.push ? ' 🔔' : ''));
+    return c;
+  }));
+  todos.addEventListener('change', () => lista.classList.toggle('hidden', todos.checked));
+  fill(body,
+    h('div', { class: 'card' }, titulo, msg,
+      h('label', { class: 'row small', style: 'margin:6px 0' }, todos, ' Enviar a todo el personal activo'), lista,
+      h('button', { class: 'btn primary block', onclick: async () => {
+        const dest = todos.checked ? 'todos' : [...marcados];
+        if (!todos.checked && !dest.length) return toast('Elige a quién enviarlo', 'warn');
+        try { const r = await busy('Enviando…', () => api('enviarAviso', { titulo: titulo.value, mensaje: msg.value, destinatarios: dest })); toast(`Enviado a ${r.enviados} (${r.con_push} con push)`, 'ok'); enviarAvisoView(); }
+        catch (e) { toast(e.message, 'error'); }
+      } }, '📢 Enviar aviso'),
+      h('p', { class: 'muted tiny' }, `${personas.filter(p => p.push).length} de ${personas.length} tienen notificaciones activas; los demás lo ven en su bandeja al abrir el portal.`)),
+    section('Enviados'),
+    hist.length ? hist.map(a => h('div', { class: 'card' }, h('div', { class: 'row between' }, h('h3', {}, a.titulo.replace(/^📢 /, '')), h('span', { class: 'muted tiny' }, fechaHora(a.fecha))),
+      h('p', { class: 'small' }, a.mensaje), h('div', { class: 'bar' }, h('span', { style: `width:${Math.round(a.leidos / a.total * 100)}%` })), h('p', { class: 'muted tiny' }, `Leído por ${a.leidos} de ${a.total}`)))
+      : empty('📢', 'Aún no envías avisos.'));
+}
+
+async function adeudosAdmin() {
+  state.tab = 'pmas';
+  const body = h('div', {}, loading());
+  screen('Adeudos y cargos', body, { back: () => go('pmas'), actions: h('button', { class: 'icon-btn', 'aria-label': 'Nuevo', onclick: () => nuevoAdeudo(null) }, '＋') });
+  try {
+    const d = await api('adeudosAdmin');
+    const act = d.adeudos.filter(a => a.estatus === 'activo');
+    fill(body,
+      h('div', { class: 'kpis' }, kpi('Por cobrar', money0(act.reduce((s, a) => s + a.saldo, 0)), `${act.length} adeudo(s) activos`),
+        kpi('Cargos flotilla', money0(d.cargos.reduce((s, c) => s + c.monto, 0)), `${d.cargos.length} reparación(es)`)),
+      section('Adeudos'),
+      d.adeudos.length ? table([
+        { t: 'Empleado', f: a => h('div', {}, h('strong', {}, a.nombre), h('div', { class: 'muted tiny' }, `${a.concepto} · ${a.adeudo_id}`)) },
+        { t: 'Saldo', cls: 'num', f: a => money(a.saldo) },
+        { t: 'Cuota', cls: 'num', f: a => money(a.cuota) },
+        { t: '', f: a => h('span', { class: 'badge b-' + (a.estatus === 'activo' ? 'warn' : 'ok') }, a.estatus) },
+      ], d.adeudos, async a => {
+        const cuota = h('input', { class: 'input', type: 'number', value: a.cuota });
+        const saldo = h('input', { class: 'input', type: 'number', value: a.saldo });
+        const est = h('select', { class: 'input' }, [['activo', 'Activo'], ['liquidado', 'Liquidado'], ['cancelado', 'Cancelado']].map(([v, t]) => h('option', { value: v, selected: a.estatus === v || null }, t)));
+        const ok = await modal(a.concepto + ' · ' + a.nombre, h('div', {}, h('label', { class: 'label' }, 'Cuota por quincena'), cuota, h('label', { class: 'label' }, 'Saldo'), saldo, h('label', { class: 'label' }, 'Estatus'), est), [['Cancelar', false], ['Guardar', true, 'primary']]);
+        if (!ok) return;
+        try { await busy('Guardando…', () => api('guardarAdeudo', { adeudo_id: a.adeudo_id, cuota: cuota.value, saldo: saldo.value, estatus: est.value })); adeudosAdmin(); } catch (e) { toast(e.message, 'error'); }
+      }) : empty('💳', 'Sin adeudos.'),
+      section('Cargos de flotilla a empleados'),
+      d.cargos.length ? table([
+        { t: 'Empleado', f: c => h('div', {}, h('strong', {}, c.nombre), h('div', { class: 'muted tiny' }, `${c.vehiculo_id} · ${c.descripcion}`)) },
+        { t: 'Monto', cls: 'num', f: c => money(c.monto) },
+        { t: 'Fecha', f: c => fecha(c.fecha) },
+      ], d.cargos) : empty('🛵', 'La flotilla no tiene cargos a empleados.'),
+      h('p', { class: 'muted small' }, 'Los cargos vienen de las reparaciones cerradas en la app de flotilla con monto al empleado. Se descuentan en la siguiente prenómina. Para ligarlos, captura el ID de flotilla en el expediente de cada empleado.'));
+  } catch (e) { fill(body, errorBox(e)); }
+}
+
+// ═════════ Arranque ═════════
+function start() {
+  if (!session.token || !session.user) return login();
+  state.tab = modoPatron() ? 'panel' : 'inicio';
+  go(state.tab);
+  refreshPush((n, data) => {
+    toast(`🔔 ${n.title || ''}${n.body ? ' — ' + n.body : ''}`, 'info', 6000);
+    setBadge(state.noLeidos + 1);
+    if (['inicio', 'panel'].includes(state.tab)) go(state.tab);
+  });
+  if (!modoPatron()) return;
+  api('bandeja').then(l => setBadge(l.filter(n => !n.leido).length)).catch(() => {});
+}
+
+if ('serviceWorker' in navigator && !DEMO) navigator.serviceWorker.register('./sw.js', { scope: './' });
+start();

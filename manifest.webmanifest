@@ -1,0 +1,17 @@
+{
+  "name": "Portal Packatelas",
+  "short_name": "Mi Portal",
+  "description": "Asistencia, recibos de nómina, pagos y solicitudes",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1f3a5f",
+  "theme_color": "#1f3a5f",
+  "lang": "es-MX",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

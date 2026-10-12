@@ -1,0 +1,224 @@
+// Datos simulados para ver la app sin backend: abre index.html?demo
+const pad = n => String(n).padStart(2, '0');
+const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const HOY = new Date();
+const hoy = iso(HOY);
+const ahora = () => `${hoy} ${pad(new Date().getHours())}:${pad(new Date().getMinutes())}`;
+const DIAS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+
+function periodo(id) {
+  const [y, m, q] = id.split('-').map(Number);
+  const ult = new Date(y, m, 0).getDate();
+  return { id, desde: `${y}-${pad(m)}-${q === 1 ? '01' : '16'}`, hasta: `${y}-${pad(m)}-${q === 1 ? '15' : ult}`, etiqueta: `${q === 1 ? '1ª' : '2ª'} quincena de ${MESES[m - 1]} ${y}` };
+}
+const perDe = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${d.getDate() <= 15 ? 1 : 2}`;
+const PER = perDe(HOY);
+const ANT = (() => { const p = periodo(PER); const d = new Date(p.desde + 'T12:00'); d.setDate(d.getDate() - 1); return perDe(d); })();
+
+const personal = [
+  { no_empleado: '1', nombre: 'Cristhian Michel Guevara Padilla', rfc: 'GUPC900101AB1', puesto: 'Director', rol: 'admin', salario_diario: 0, clabe: '', entrada: '', dias: '', pin: '482915' },
+  { no_empleado: '4', nombre: 'Saidd Argenis López', rfc: 'LOAS950505H12', puesto: 'Repartidor', rol: 'empleado', salario_diario: 320, clabe: '012180015237752341', entrada: '9:00', dias: 'L,M,Mi,J,V,S', flotilla_id: 'U-004', ingreso: '2025-03-10', pin: '482915' },
+  { no_empleado: '5', nombre: 'Casandra Alicia Ruiz', rfc: 'RUCA990909MX1', puesto: 'Almacén', rol: 'empleado', salario_diario: 300, clabe: '127180017550284489', entrada: '9:00', dias: 'L,M,Mi,J,V,S', ingreso: '2024-08-01', pin: '' },
+  { no_empleado: '52', nombre: 'Diego Mendoza', rfc: '', puesto: 'Repartidor', rol: 'empleado', salario_diario: 300, clabe: '', entrada: '10:00', dias: 'L,M,Mi,J,V,S', flotilla_id: 'U-004' },
+  { no_empleado: '75', nombre: 'Michell Saucedo', rfc: 'SAMI000312HD5', puesto: 'Repartidor', rol: 'empleado', salario_diario: 300, clabe: '012180015246296076', entrada: '10:00', dias: 'L,M,Mi,J,V,S', flotilla_id: 'U-005', pin: '1' },
+  { no_empleado: '92', nombre: 'Jonatan Ortega', rfc: 'OEJO010101H11', puesto: 'Repartidor', rol: 'empleado', salario_diario: 300, clabe: '012180015039708386', entrada: '10:00', dias: 'L,M,Mi,J,V,S', pin: '1' },
+  { no_empleado: '43', nombre: 'Natividad', rfc: '', puesto: 'Limpieza', rol: 'empleado', salario_diario: 0, clabe: '', entrada: '', dias: '' },
+];
+
+// asistencia sintética determinista
+function hash(s) { let x = 0; for (const c of s) x = (x * 31 + c.charCodeAt(0)) >>> 0; return x; }
+function asistencia(no, perId) {
+  const p = personal.find(x => x.no_empleado === no);
+  const per = periodo(perId);
+  const dias = [];
+  const t = { dias_laborales: 0, asistencias: 0, faltas: 0, justificadas: 0, retardos: 0, min_tarde: 0, retardos_comida: 0, min_comida_extra: 0, min_total: 0 };
+  const sinHorario = !p.entrada;
+  for (let d = new Date(per.desde + 'T12:00'); iso(d) <= per.hasta; d.setDate(d.getDate() + 1)) {
+    const f = iso(d), dow = d.getDay(), r = hash(no + f) % 100;
+    const x = { fecha: f, dia: DIAS[dow], laboral: !sinHorario && dow !== 0, marcas: [], entrada: '', debia: p.entrada, min_tarde: 0, min_comida: null, min_comida_extra: 0, estado: '' };
+    if (f > hoy) x.estado = 'FUTURO';
+    else if (sinHorario) x.estado = 'SIN_HORARIO';
+    else if (dow === 0) x.estado = 'DESCANSO';
+    else {
+      t.dias_laborales++;
+      if (r < 6 && f !== hoy) { x.estado = 'FALTA'; t.faltas++; }
+      else if (r < 9 && f !== hoy) { x.estado = 'JUSTIFICADA'; x.motivo = 'Cita médica'; t.justificadas++; }
+      else {
+        const [hh] = p.entrada.split(':').map(Number);
+        const late = r > 78 ? (r % 17) + 1 : 0;
+        const em = hh * 60 - 4 + (r % 5) + (late ? 4 + late : 0);
+        x.entrada = `${Math.floor(em / 60)}:${pad(em % 60)}`;
+        x.marcas.push({ tipo: 'ENTRADA', hora: x.entrada });
+        x.min_tarde = late;
+        if (f !== hoy || new Date().getHours() > 16) {
+          const extra = r % 9 === 0 ? 12 : 0;
+          x.min_comida = 60 + extra; x.min_comida_extra = extra;
+          x.marcas.push({ tipo: 'SALIDA_COMIDA', hora: '14:00' }, { tipo: 'REGRESO_COMIDA', hora: `15:${pad(extra)}` });
+          if (extra) { t.retardos_comida++; t.min_comida_extra += extra; }
+        }
+        t.asistencias++;
+        if (late) { t.retardos++; t.min_tarde += late; }
+        x.estado = late || x.min_comida_extra ? 'RETARDO' : 'A_TIEMPO';
+      }
+    }
+    dias.push(x);
+  }
+  t.min_total = t.min_tarde + t.min_comida_extra;
+  t.horas_retraso = Math.round(t.min_total / 60 * 100) / 100;
+  t.horas_faltas = t.faltas * 8;
+  t.horas_descuento = Math.round((t.horas_retraso + t.horas_faltas) * 100) / 100;
+  return { no_empleado: no, nombre: p.nombre, periodo: per, horario: sinHorario ? null : { entrada: p.entrada, dias: p.dias, comida: 60 }, sin_horario: sinHorario, cuenta_desde: per.desde, dias, totales: t };
+}
+
+let seq = 100;
+const recibos = [];
+const pagos = [];
+const solicitudes = [
+  { sol_id: 'SOL-00003', no_empleado: '92', nombre: 'Jonatan Ortega', tipo: 'justificante', tipo_txt: 'Justificante de falta', fecha_desde: hoy, fecha_hasta: hoy, dias: 1, monto: 0, motivo: 'Me llamaron de la escuela de mi hijo', evidencia: 'x', estatus: 'pendiente', fecha_solicitud: ahora() },
+  { sol_id: 'SOL-00002', no_empleado: '4', nombre: 'Saidd Argenis López', tipo: 'vacaciones', tipo_txt: 'Vacaciones', fecha_desde: '2026-12-21', fecha_hasta: '2026-12-24', dias: 4, monto: 0, motivo: 'Viaje familiar', estatus: 'pendiente', fecha_solicitud: ahora() },
+  { sol_id: 'SOL-00001', no_empleado: '4', nombre: 'Saidd Argenis López', tipo: 'justificante', tipo_txt: 'Justificante de falta', fecha_desde: periodo(ANT).desde, fecha_hasta: periodo(ANT).desde, dias: 1, monto: 0, motivo: 'Consulta IMSS', estatus: 'aprobada', fecha_solicitud: periodo(ANT).desde + ' 10:12', comentario: 'Ok, trae tu comprobante', fecha_resolucion: periodo(ANT).desde + ' 12:40', resuelta_por: 'Cristhian' },
+];
+const adeudos = [{ adeudo_id: 'AD-00001', no_empleado: '4', nombre: 'Saidd Argenis López', concepto: 'Préstamo', monto_total: 2000, cuota: 250, saldo: 1250, fecha_alta: '2026-08-15', estatus: 'activo', origen: 'RH' }];
+const cargos = [{ rep_id: 'R-000004', vehiculo_id: 'M-02', responsable_id: 'U-004', descripcion: 'Espejo izquierdo roto (no reportado en check matutino)', fecha: hoy, monto: 350, costo_total: 350, causa: 'mal_uso' }];
+const bandeja = [];
+const dispositivos = new Set(['1', '75']);
+function notificar(no, tipo, titulo, mensaje, ref) { bandeja.unshift({ notif_id: 'N-' + (++seq), fecha: ahora(), no_empleado: no, tipo, titulo, mensaje, ref, leido: false }); }
+
+function prenomina(perId) {
+  const per = periodo(perId);
+  return { periodo: per, filas: personal.map(p => {
+    const a = asistencia(p.no_empleado, perId).totales;
+    const sd = p.salario_diario;
+    const cg = p.flotilla_id ? cargos.filter(c => c.responsable_id === p.flotilla_id && !c.cobrado) : [];
+    const ab = adeudos.filter(x => x.no_empleado === p.no_empleado && x.estatus === 'activo').map(x => ({ adeudo_id: x.adeudo_id, concepto: x.concepto, monto: Math.min(x.cuota, x.saldo), saldo: x.saldo }));
+    const f = { no_empleado: p.no_empleado, nombre: p.nombre, puesto: p.puesto, salario_diario: sd, dias: 15, sin_salario: !sd, sin_clabe: !p.clabe, sin_horario: !p.entrada, asistencia: a,
+      sueldo: sd * 15, bonos: 0, otras_percepciones: 0, desc_faltas: a.faltas * sd, desc_retardos: Math.round(a.horas_retraso * sd / 8 * 100) / 100,
+      desc_cargos: cg.reduce((s, c) => s + c.monto, 0), desc_adeudos: ab.reduce((s, x) => s + x.monto, 0), otras_deducciones: 0, cargos: cg, abonos: ab,
+      recibo_existente: (r => r ? { recibo_id: r.recibo_id, neto: r.neto, estatus: r.estatus } : null)(recibos.find(r => r.no_empleado === p.no_empleado && r.periodo === perId && r.estatus !== 'cancelado')) };
+    return tot(f);
+  }) };
+}
+function tot(f) {
+  f.total_percepciones = f.sueldo + f.bonos + f.otras_percepciones;
+  f.total_deducciones = f.desc_faltas + f.desc_retardos + f.desc_cargos + f.desc_adeudos + f.otras_deducciones;
+  f.neto = Math.max(0, Math.round((f.total_percepciones - f.total_deducciones) * 100) / 100);
+  return f;
+}
+function emitir(perId, filas) {
+  const per = periodo(perId);
+  return filas.map(f => {
+    const r = { ...tot({ ...f }), recibo_id: 'REC-' + String(++seq).padStart(6, '0'), periodo: perId, etiqueta: per.etiqueta, desde: per.desde, hasta: per.hasta,
+      detalle: { asistencia: f.asistencia, cargos: f.cargos, abonos: f.abonos, notas: f.notas || '', concepto_bonos: f.concepto_bonos || '' },
+      estatus: 'emitido', fecha_emision: ahora(), firma_fecha: '', pago_id: '', fecha_pago: '' };
+    recibos.unshift(r);
+    (f.cargos || []).forEach(c => { const x = cargos.find(y => y.rep_id === c.rep_id); if (x) x.cobrado = r.recibo_id; });
+    notificar(f.no_empleado, 'recibo', '🧾 Tu recibo de nómina está listo', `${per.etiqueta}: neto $${r.neto.toLocaleString('es-MX')}. Ábrelo para revisarlo y firmarlo.`, r.recibo_id);
+    return r;
+  });
+}
+// Historial: recibo de la quincena anterior pagado y firmado para Saidd y Michell
+(() => {
+  const pre = prenomina(ANT).filas.filter(f => ['4', '75', '92'].includes(f.no_empleado));
+  emitir(ANT, pre).forEach(r => {
+    r.fecha_emision = periodo(ANT).hasta + ' 12:10';
+    if (r.no_empleado !== '92') { r.firma_fecha = periodo(ANT).hasta + ' 19:02'; }
+    const pid = 'PAG-' + (++seq);
+    pagos.unshift({ pago_id: pid, fecha: periodo(ANT).hasta + ' 18:36', no_empleado: r.no_empleado, nombre: r.nombre, monto: r.neto, concepto: 'nomina', clave_rastreo: 'FN455589T17908' + seq, recibo_id: r.recibo_id, cuadra: 'SI', origen: 'fondeadora' });
+    r.estatus = 'pagado'; r.pago_id = pid; r.fecha_pago = periodo(ANT).hasta + ' 18:36';
+  });
+  pagos.unshift({ pago_id: 'PAG-' + (++seq), fecha: periodo(ANT).hasta + ' 21:39', no_empleado: '4', nombre: 'Saidd Argenis López', monto: 1000, concepto: 'bono tiempo extra', clave_rastreo: 'FN455589T1791002381', recibo_id: '', cuadra: 'SIN RECIBO', origen: 'fondeadora' });
+  bandeja.length = 0;
+  notificar('4', 'pago', '💸 Te depositamos $1,000.00', 'Concepto: bono tiempo extra · Rastreo FN455589T1791002381', '');
+  notificar('4', 'aviso', '📢 Junta el sábado', 'Junta general a las 8:30 en la base. Lleguen 10 minutos antes.', 'AV-00001');
+  notificar('1', 'solicitud', '📝 Nueva solicitud: Justificante de falta', 'Jonatan Ortega · ' + hoy, 'SOL-00003');
+})();
+
+const sessions = {};
+function me(token) { const no = sessions[token] || (token && token.startsWith('demo-') ? token.slice(5) : null); const p = personal.find(x => x.no_empleado === no); if (!p) throw new Error('Sesión requerida'); return p; }
+const user = p => ({ no_empleado: p.no_empleado, nombre: p.nombre, rol: p.rol, puesto: p.puesto });
+const pickR = r => ({ ...r });
+
+export function handle(action, d, token) {
+  const ADMIN = () => { const p = me(token); if (p.rol !== 'admin') throw new Error('Sin permiso para esta acción'); return p; };
+  switch (action) {
+    case 'estadoRfc': { const p = personal.find(x => x.rfc === d.rfc); if (!p) { if (/^[A-Z]{4}\d{6}/.test(d.rfc)) { personal.find(x => x.no_empleado === '5').rfc = d.rfc; return { estado: 'nuevo' }; } throw new Error('Ese RFC no está dado de alta. Pídele a RH que lo registre.'); } return { estado: p.pin ? 'activo' : 'nuevo' }; }
+    case 'primerAcceso': { const p = personal.find(x => x.rfc === d.rfc); if (!p || p.no_empleado !== d.no_empleado) throw new Error('El RFC y el número de empleado no coinciden'); p.pin = d.pin; return { token: 'demo-' + p.no_empleado, usuario: user(p) }; }
+    case 'login': { const p = personal.find(x => x.rfc === d.rfc); if (!p || p.pin !== d.pin) throw new Error('RFC o PIN incorrecto. Te quedan 4 intento(s).'); return { token: 'demo-' + p.no_empleado, usuario: user(p) }; }
+    case 'inicio': {
+      const p = me(token); const a = asistencia(p.no_empleado, PER); const rs = recibos.filter(r => r.no_empleado === p.no_empleado && r.estatus !== 'cancelado');
+      return { hoy, periodo: periodo(PER), asistencia: a.totales, hoy_detalle: a.dias.find(x => x.fecha === hoy) || null, horario: a.horario, ultimo_recibo: rs[0] || null,
+        recibos_sin_firmar: rs.filter(r => !r.firma_fecha).length, ultimo_pago: pagos.find(x => x.no_empleado === p.no_empleado) || null,
+        no_leidos: bandeja.filter(n => n.no_empleado === p.no_empleado && !n.leido).length,
+        saldo_adeudos: adeudos.filter(x => x.no_empleado === p.no_empleado && x.estatus === 'activo').reduce((s, x) => s + x.saldo, 0),
+        cargos_pendientes: p.flotilla_id ? cargos.filter(c => c.responsable_id === p.flotilla_id && !c.cobrado).reduce((s, c) => s + c.monto, 0) : 0,
+        solicitudes_pendientes: solicitudes.filter(s => s.no_empleado === p.no_empleado && s.estatus === 'pendiente').length };
+    }
+    case 'perfil': { const p = me(token); const ing = p.ingreso || ''; const anios = ing ? Math.floor((HOY - new Date(ing)) / 3.156e10) : 0;
+      return { ...p, fecha_ingreso: ing, antiguedad: ing ? `${anios} año(s)` : '', clabe: p.clabe ? '•••• ' + p.clabe.slice(-4) : '', banco: p.clabe ? 'BBVA' : '', horario: { entrada: p.entrada, dias: p.dias, comida: p.entrada ? 60 : '' }, celular_checador: true,
+        vacaciones: ing ? { anios, derecho: anios ? 10 + Math.min(anios, 5) * 2 : 0, tomados: 2, disponibles: anios ? 10 + Math.min(anios, 5) * 2 - 2 : 0, desde: ing.replace(/^\d{4}/, HOY.getFullYear() - (iso(HOY).slice(5) < ing.slice(5) ? 1 : 0)), proximo_aniversario: ing.replace(/^\d{4}/, HOY.getFullYear() + (iso(HOY).slice(5) < ing.slice(5) ? 0 : 1)), dias_proximo: 12 + Math.min(anios, 4) * 2 } : { sin_fecha: true } }; }
+    case 'asistencia': return asistencia(me(token).no_empleado, d.periodo);
+    case 'asistenciaDe': ADMIN(); return asistencia(d.no_empleado, d.periodo);
+    case 'recibos': { const p = me(token); return recibos.filter(r => r.no_empleado === p.no_empleado && r.estatus !== 'cancelado').map(pickR); }
+    case 'recibo': { const p = me(token); const r = recibos.find(x => x.recibo_id === d.recibo_id && (x.no_empleado === p.no_empleado || p.rol === 'admin')); if (!r) throw new Error('Recibo no encontrado'); return pickR(r); }
+    case 'reciboPdf': throw new Error('En la demostración no hay PDF; con el backend real se descarga el PDF generado en Drive.');
+    case 'firmarRecibo': { const p = me(token); if (d.pin !== p.pin) throw new Error('PIN incorrecto'); const r = recibos.find(x => x.recibo_id === d.recibo_id); r.firma_fecha = ahora(); return pickR(r); }
+    case 'pagos': { const p = me(token); return pagos.filter(x => x.no_empleado === p.no_empleado); }
+    case 'adeudos': { const p = me(token); const ad = adeudos.filter(x => x.no_empleado === p.no_empleado);
+      const cg = p.flotilla_id ? cargos.filter(c => c.responsable_id === p.flotilla_id).map(c => ({ ...c, estatus: c.cobrado ? 'descontado' : 'pendiente', recibo_id: c.cobrado || '' })) : [];
+      return { adeudos: ad, abonos: [{ adeudo_id: 'AD-00001', fecha: periodo(ANT).hasta, monto: 250, recibo_id: 'REC-000101' }], cargos: cg,
+        saldo_total: ad.filter(a => a.estatus === 'activo').reduce((s, a) => s + a.saldo, 0), cargos_pendientes: cg.filter(c => c.estatus === 'pendiente').reduce((s, c) => s + c.monto, 0) }; }
+    case 'solicitudes': { const p = me(token); return solicitudes.filter(s => s.no_empleado === p.no_empleado); }
+    case 'subirEvidencia': return { id: 'demo' };
+    case 'crearSolicitud': { const p = me(token); if (!d.motivo && d.tipo !== 'vacaciones') throw new Error('Escribe el motivo');
+      const T = { justificante: 'Justificante de falta', vacaciones: 'Vacaciones', permiso: 'Permiso', anticipo: 'Anticipo de nómina', otro: 'Otro' };
+      solicitudes.unshift({ sol_id: 'SOL-' + (++seq), no_empleado: p.no_empleado, nombre: p.nombre, tipo: d.tipo, tipo_txt: T[d.tipo], fecha_desde: d.fecha_desde, fecha_hasta: d.fecha_hasta, dias: d.fecha_desde ? 1 : 0, monto: Number(d.monto || 0), motivo: d.motivo, evidencia: d.evidencia, estatus: 'pendiente', fecha_solicitud: ahora() }); return 'ok'; }
+    case 'bandeja': { const p = me(token); return bandeja.filter(n => n.no_empleado === p.no_empleado); }
+    case 'marcarLeido': { const p = me(token); bandeja.forEach(n => { if (n.no_empleado === p.no_empleado && (d.todos || (d.ids || []).includes(n.notif_id))) n.leido = true; }); return true; }
+    case 'documentos': return [{ id: 'd1', nombre: 'Contrato individual de trabajo.pdf', mime: 'application/pdf', fecha: '2025-03-10', tamano: 182000 }, { id: 'd2', nombre: 'Constancia de situación fiscal.pdf', mime: 'application/pdf', fecha: '2025-03-10', tamano: 96000 }];
+    case 'documento': throw new Error('En la demostración no se descargan archivos.');
+    case 'registerDevice': dispositivos.add(me(token).no_empleado); return true;
+    case 'cambiarPin': { const p = me(token); if (d.actual !== p.pin) throw new Error('Tu PIN actual no es correcto'); p.pin = d.nuevo; return { token, usuario: user(p) }; }
+
+    case 'panel': {
+      ADMIN();
+      const ag = handle('asistenciaGeneral', { periodo: PER }, token);
+      const L = ag.empleados.filter(e => e.hoy && e.hoy.laboral);
+      return { periodo: periodo(PER), periodo_anterior: periodo(ANT), hoy,
+        hoy_resumen: { esperados: L.length, presentes: L.filter(e => e.hoy.entrada).length, tarde: L.filter(e => e.hoy.min_tarde > 0).length,
+          faltan: L.filter(e => !e.hoy.entrada).map(e => ({ no_empleado: e.no_empleado, nombre: e.nombre, debia: e.hoy.debia })),
+          llegadas: L.filter(e => e.hoy.entrada).map(e => ({ nombre: e.nombre, entrada: e.hoy.entrada, min_tarde: e.hoy.min_tarde })) },
+        quincena: { retardos: ag.empleados.reduce((s, e) => s + e.totales.retardos + e.totales.retardos_comida, 0), horas_retraso: ag.empleados.reduce((s, e) => s + e.totales.horas_retraso, 0),
+          faltas: ag.empleados.reduce((s, e) => s + e.totales.faltas, 0), top: ag.empleados.filter(e => e.totales.horas_descuento > 0).slice(0, 5).map(e => ({ nombre: e.nombre, faltas: e.totales.faltas, min_total: e.totales.min_total })) },
+        nomina: { recibos_periodo_anterior: recibos.filter(r => r.periodo === ANT).length, recibos_periodo: recibos.filter(r => r.periodo === PER).length, sin_firmar: recibos.filter(r => !r.firma_fecha && r.estatus !== 'cancelado').length,
+          sin_pagar: recibos.filter(r => r.estatus === 'emitido').length, pagos_semana: pagos.reduce((s, p) => s + p.monto, 0), pagos_no_cuadran: pagos.filter(p => p.cuadra === 'NO').length },
+        solicitudes_pendientes: solicitudes.filter(s => s.estatus === 'pendiente').length,
+        datos_faltantes: { sin_rfc: personal.filter(p => !p.rfc).length, sin_clabe: personal.filter(p => !p.clabe).length, sin_salario: personal.filter(p => !p.salario_diario).length, sin_pin: personal.filter(p => !p.pin).length, sin_horario: personal.filter(p => !p.entrada).length },
+        con_push: dispositivos.size, total_personal: personal.length };
+    }
+    case 'asistenciaGeneral': ADMIN(); return { periodo: periodo(d.periodo), hoy, empleados: personal.map(p => { const a = asistencia(p.no_empleado, d.periodo); const x = a.dias.find(y => y.fecha === hoy);
+      return { no_empleado: p.no_empleado, nombre: p.nombre, puesto: p.puesto, sin_horario: a.sin_horario, totales: a.totales, hoy: x ? { estado: x.estado, entrada: x.entrada, min_tarde: x.min_tarde, debia: x.debia, laboral: x.laboral } : null }; })
+      .sort((a, b) => b.totales.horas_descuento - a.totales.horas_descuento) };
+    case 'prenomina': ADMIN(); return prenomina(d.periodo);
+    case 'emitirRecibos': ADMIN(); { const r = emitir(d.periodo, d.filas); return { emitidos: r.length, recibos: r }; }
+    case 'recibosAdmin': ADMIN(); return recibos.filter(r => !d.periodo || r.periodo === d.periodo).map(pickR);
+    case 'cancelarRecibo': ADMIN(); recibos.find(r => r.recibo_id === d.recibo_id).estatus = 'cancelado'; return true;
+    case 'pagosAdmin': ADMIN(); return pagos;
+    case 'asignarPago': ADMIN(); { const p = pagos.find(x => x.pago_id === d.pago_id); p.recibo_id = d.recibo_id; p.cuadra = d.recibo_id ? 'MANUAL' : 'SIN RECIBO'; return true; }
+    case 'pagoManual': ADMIN(); { const p = personal.find(x => x.no_empleado === d.no_empleado); pagos.unshift({ pago_id: 'PAG-' + (++seq), fecha: ahora(), no_empleado: p.no_empleado, nombre: p.nombre, monto: Number(d.monto), concepto: d.concepto, clave_rastreo: 'MANUAL', recibo_id: '', cuadra: 'SIN RECIBO', origen: 'manual' }); return 'ok'; }
+    case 'revisarAhora': ADMIN(); return { revisados: 37, pagos_nuevos: 0, transferencias_a_otros: 31 };
+    case 'personal': ADMIN(); return personal.map(p => ({ ...p, estatus: 'activo', tiene_pin: !!p.pin, bloqueado: false, push: dispositivos.has(p.no_empleado), horario: p.entrada ? { entrada: p.entrada, dias: p.dias, comida: 60 } : null, celular_checador: true, fecha_ingreso: p.ingreso || '' }));
+    case 'guardarPersona': ADMIN(); { const x = personal.find(p => p.no_empleado === d.persona.no_empleado); if (x) Object.assign(x, d.persona, { salario_diario: Number(d.persona.salario_diario || 0) }); else personal.push({ ...d.persona, entrada: '', dias: '' }); return true; }
+    case 'resetPin': ADMIN(); personal.find(p => p.no_empleado === d.no_empleado).pin = ''; return true;
+    case 'subirDocumento': ADMIN(); return { id: 'x' };
+    case 'adeudosAdmin': ADMIN(); return { adeudos, cargos: cargos.map(c => ({ ...c, nombre: personal.find(p => p.flotilla_id === c.responsable_id)?.nombre || c.responsable_id })) };
+    case 'guardarAdeudo': ADMIN(); { if (d.adeudo_id) { Object.assign(adeudos.find(a => a.adeudo_id === d.adeudo_id), { cuota: Number(d.cuota), saldo: Number(d.saldo), estatus: d.estatus }); return true; }
+      const p = personal.find(x => x.no_empleado === d.no_empleado); adeudos.unshift({ adeudo_id: 'AD-' + (++seq), no_empleado: p.no_empleado, nombre: p.nombre, concepto: d.concepto, monto_total: Number(d.monto_total), cuota: Number(d.cuota || d.monto_total), saldo: Number(d.monto_total), fecha_alta: hoy, estatus: 'activo' }); return true; }
+    case 'solicitudesAdmin': ADMIN(); return solicitudes.filter(s => !d.estatus || s.estatus === d.estatus);
+    case 'resolverSolicitud': { const a = ADMIN(); const s = solicitudes.find(x => x.sol_id === d.sol_id); Object.assign(s, { estatus: d.aprobar ? 'aprobada' : 'rechazada', comentario: d.comentario, fecha_resolucion: ahora(), resuelta_por: a.nombre });
+      notificar(s.no_empleado, 'solicitud', (d.aprobar ? '✅ Aprobada: ' : '❌ Rechazada: ') + s.tipo_txt, d.comentario || '', s.sol_id); return true; }
+    case 'enviarAviso': ADMIN(); { const dest = d.destinatarios === 'todos' ? personal.map(p => p.no_empleado) : d.destinatarios; dest.forEach(no => notificar(no, 'aviso', '📢 ' + d.titulo, d.mensaje, 'AV')); return { enviados: dest.length, con_push: dest.filter(x => dispositivos.has(x)).length }; }
+    case 'avisosEnviados': ADMIN(); return [{ ref: 'AV-00001', fecha: periodo(ANT).hasta + ' 09:00', titulo: '📢 Junta el sábado', mensaje: 'Junta general a las 8:30 en la base.', total: 7, leidos: 4 }];
+    default: throw new Error('Acción no simulada: ' + action);
+  }
+}
