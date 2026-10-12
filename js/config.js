@@ -1,7 +1,7 @@
 // Configuración pública. Nada aquí es secreto: Apps Script valida la sesión en cada llamada.
 export const CONFIG = {
   // URL del Web App del Portal (termina en /exec). Se llena al desplegar apps-script/Code.gs.
-  API_URL: 'PENDIENTE',
+  API_URL: 'https://script.google.com/macros/s/AKfycbwsnN_EPOAiUuYJdlJSz1NeiKGZuKGq0YKiEeYzdqa_EDy6ik_5xKDxv1paaI1w67Ij/exec',
 
   // Mismo proyecto de Firebase que la flotilla
   firebase: {
