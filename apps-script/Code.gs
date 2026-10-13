@@ -24,7 +24,7 @@ const EMPRESA_DOMICILIO = 'Juan Lucas de Lassaga 54, Piso 1, Col. Obrera, Cuauht
 const SCHEMA = {
   Personal: ['no_empleado', 'nombre', 'rfc', 'curp', 'nss', 'puesto', 'area', 'rol', 'estatus', 'fecha_ingreso',
     'fecha_baja', 'salario_diario', 'clabe', 'banco', 'telefono', 'correo', 'flotilla_id', 'carpeta_docs',
-    'pin_hash', 'pin_intentos', 'pin_bloqueado', 'ultimo_acceso', 'notas'],
+    'pin_hash', 'pin_intentos', 'pin_bloqueado', 'ultimo_acceso', 'notas', 'onb_rol', 'onb_docs', 'onb_apps'],
   Recibos: ['recibo_id', 'no_empleado', 'nombre', 'periodo', 'desde', 'hasta', 'dias', 'salario_diario',
     'sueldo', 'bonos', 'otras_percepciones', 'desc_faltas', 'desc_retardos', 'desc_cargos', 'desc_adeudos',
     'otras_deducciones', 'total_percepciones', 'total_deducciones', 'neto', 'detalle_json', 'pdf_id', 'estatus',
@@ -40,7 +40,23 @@ const SCHEMA = {
   Dispositivos: ['no_empleado', 'fcm_token', 'plataforma', 'fecha_registro', 'activo'],
   Bitacora: ['fecha', 'no_empleado', 'accion', 'entidad', 'ref', 'detalle'],
   ConfigPortal: ['clave', 'valor', 'descripcion'],
+  Apps: ['app_id', 'nombre', 'descripcion', 'icono', 'color', 'tipo', 'url_instalar', 'android_package', 'url_abrir',
+    'puestos', 'requerida', 'acceso_directo', 'orden', 'activo'],
 };
+
+/** Apps iniciales (se editan después en la pestaña Apps). tipo: playstore | apk | web. puestos: todos | repartidor */
+const APPS_DEFAULT = [
+  ['packatelas', 'Packatelas', 'Escaneo de paquetes', '📦', '#1f3a5f', 'apk', 'apps/packatelas.apk', 'app.packatelas.mx', '', 'repartidor', 'SI', 'SI'],
+  ['whatsapp', 'WhatsApp Business', 'Comunicación con clientes', '💬', '#25a35a', 'playstore', 'https://play.google.com/store/apps/details?id=com.whatsapp.w4b', 'com.whatsapp.w4b', 'https://wa.me/', 'repartidor', 'SI', 'SI'],
+  ['zello', 'Zello', 'Radio con el equipo', '📻', '#e8732c', 'playstore', 'https://play.google.com/store/apps/details?id=com.loudtalks', 'com.loudtalks', '', 'repartidor', 'SI', 'SI'],
+  ['mydriver', 'My Driver', 'Entregas asignadas', '🚚', '#1d4e6b', 'playstore', 'https://play.google.com/store/search?q=My%20Driver&c=apps', '', '', 'repartidor', 'SI', 'SI'],
+  ['flex', 'Envíos Flex', 'Mercado Libre', '🟨', '#e0b800', 'playstore', 'https://play.google.com/store/search?q=Env%C3%ADos%20Flex%20Mercado%20Libre&c=apps', '', '', 'repartidor', 'SI', 'SI'],
+  ['waze', 'Waze', 'Navegación', '🧭', '#33ccff', 'playstore', 'https://play.google.com/store/apps/details?id=com.waze', 'com.waze', 'https://waze.com/ul', 'repartidor', 'SI', 'SI'],
+  ['maps', 'Google Maps', 'Navegación y direcciones', '🗺️', '#34a853', 'playstore', 'https://play.google.com/store/apps/details?id=com.google.android.apps.maps', 'com.google.android.apps.maps', 'https://maps.google.com/', 'repartidor', 'SI', 'SI'],
+  ['telefono', 'Teléfono de Google', 'Llamadas', '📞', '#1a73e8', 'playstore', 'https://play.google.com/store/apps/details?id=com.google.android.dialer', 'com.google.android.dialer', '', 'repartidor', 'SI', 'NO'],
+  ['mensajes', 'Mensajes de Google', 'SMS', '✉️', '#1a73e8', 'playstore', 'https://play.google.com/store/apps/details?id=com.google.android.apps.messaging', 'com.google.android.apps.messaging', '', 'repartidor', 'SI', 'NO'],
+  ['flotilla', 'Flotilla', 'Check de moto, gasolina y fallas', '🛵', '#2b4c78', 'web', 'https://computenga.github.io/flotilla-packatelas/', '', 'https://computenga.github.io/flotilla-packatelas/', 'repartidor', 'NO', 'SI'],
+];
 
 const CONFIG_DEFAULTS = [
   ['APP_URL', 'https://computenga.github.io/portal-packatelas/', 'Dirección de la app (para abrirla desde la notificación)'],
@@ -54,6 +70,7 @@ const CONFIG_DEFAULTS = [
   ['EVIDENCIAS_FOLDER_ID', '', 'Carpeta de Drive para justificantes y evidencias (se crea sola)'],
   ['EXPEDIENTES_FOLDER_ID', '', 'Carpeta de Drive con una subcarpeta por empleado (se crea sola)'],
   ['FONDEADORA_REMITENTE', 'info@negocios.fondeadora.com', 'Remitente de los correos de Fondeadora'],
+  ['FORM_DOCUMENTOS', 'https://forms.gle/qADGZZbjLRHhwjBo7', 'Formulario de documentos de alta (paso 2 de la bienvenida)'],
 ];
 
 // ───────────────────────── Entrada HTTP ─────────────────────────
@@ -104,6 +121,12 @@ const ACTIONS = {
   documentos:       { fn: (req, u) => documentosDe_(u.no_empleado) },
   documento:        { fn: documento_ },
   registerDevice:   { fn: registerDevice_ },
+  bienvenida:       { fn: (req, u) => bienvenida_(u.no_empleado) },
+  elegirRol:        { fn: elegirRol_ },
+  marcarApp:        { fn: marcarApp_ },
+  marcarDocs:       { fn: (req, u) => marcarDocs_(u.no_empleado, req.enviado !== false, u) },
+  apps:             { fn: (req, u) => appsPara_(u.no_empleado) },
+  configPublica:    { public: true, fn: () => ({ form_documentos: config_('FORM_DOCUMENTOS', '') }) },
   cambiarPin:       { fn: cambiarPin_ },
 
   // Patrón
@@ -128,6 +151,11 @@ const ACTIONS = {
   resolverSolicitud:{ admin: true, fn: resolverSolicitud_ },
   enviarAviso:      { admin: true, fn: enviarAviso_ },
   avisosEnviados:   { admin: true, fn: avisosEnviados_ },
+  bienvenidaDe:     { admin: true, fn: (req) => bienvenida_(req.no_empleado) },
+  docsRecibidos:    { admin: true, fn: (req, u) => marcarDocs_(req.no_empleado, !!req.recibidos, u) },
+  recordarBienvenida:{ admin: true, fn: recordarBienvenida_ },
+  appsAdmin:        { admin: true, fn: () => rows_('Apps').map(pickApp_).sort((a, b) => a.orden - b.orden) },
+  guardarApp:       { admin: true, fn: guardarApp_ },
 };
 
 // ───────────────────────── Instalación ─────────────────────────
@@ -141,6 +169,7 @@ function setup() {
   if (!config_('RECIBOS_FOLDER_ID')) setConfig_('RECIBOS_FOLDER_ID', subfolder_(root, 'Recibos').getId());
   if (!config_('EVIDENCIAS_FOLDER_ID')) setConfig_('EVIDENCIAS_FOLDER_ID', subfolder_(root, 'Evidencias').getId());
   if (!config_('EXPEDIENTES_FOLDER_ID')) setConfig_('EXPEDIENTES_FOLDER_ID', subfolder_(root, 'Expedientes').getId());
+  if (!rows_('Apps').length) APPS_DEFAULT.forEach((a, i) => append_('Apps', appRow_(a, i)));
   const r = sincronizarPersonal();
   instalarTriggers();
   console.log('Listo. Personal: ' + r.nuevos + ' nuevos, ' + r.actualizados + ' nombres actualizados.');
@@ -347,6 +376,8 @@ function inicio_(req, u) {
     saldo_adeudos: ad.saldo_total,
     cargos_pendientes: ad.cargos_pendientes,
     solicitudes_pendientes: solicitudesDe_(u.no_empleado).filter(s => s.estatus === 'pendiente').length,
+    bienvenida: (b => ({ hechos: b.hechos, total: b.total, completa: b.completa, siguiente: b.siguiente })) (bienvenida_(u.no_empleado)),
+    accesos: appsPara_(u.no_empleado).filter(a => a.acceso_directo),
   };
 }
 
@@ -1195,6 +1226,108 @@ function subirDocumento_(req, u) {
   return { id: f.getId() };
 }
 
+// ───────────────────────── Bienvenida (onboarding) y apps ─────────────────────────
+
+function appRow_(a, i) {
+  return { app_id: a[0], nombre: a[1], descripcion: a[2], icono: a[3], color: a[4], tipo: a[5], url_instalar: a[6], android_package: a[7],
+    url_abrir: a[8], puestos: a[9], requerida: a[10], acceso_directo: a[11], orden: (i + 1) * 10, activo: 'SI' };
+}
+
+function pickApp_(a) {
+  return { app_id: String(a.app_id), nombre: a.nombre, descripcion: a.descripcion, icono: a.icono || '📱', color: a.color || '#2b4c78',
+    tipo: a.tipo || 'playstore', url_instalar: a.url_instalar, android_package: a.android_package, url_abrir: a.url_abrir,
+    puestos: a.puestos || 'todos', requerida: a.requerida === 'SI', acceso_directo: a.acceso_directo === 'SI', orden: Number(a.orden || 999),
+    activo: a.activo !== 'NO' };
+}
+
+/** 'repartidor' | 'otro' | '' (sin definir). El puesto del expediente manda; si está vacío, lo que eligió el empleado. */
+function rolBienvenida_(p) {
+  const puesto = quitarAcentos_(String(p.puesto || '')).toLowerCase();
+  if (puesto) return /repart|chofer|driver|mensajer/.test(puesto) ? 'repartidor' : 'otro';
+  if (p.flotilla_id) return 'repartidor';
+  return p.onb_rol || '';
+}
+
+function appsPara_(no) {
+  const p = persona_(no);
+  const rol = rolBienvenida_(p);
+  const listas = String(p.onb_apps || '').split(',').filter(String);
+  return rows_('Apps').map(pickApp_).filter(a => a.activo && (a.puestos === 'todos' || a.puestos === rol))
+    .sort((a, b) => a.orden - b.orden).map(a => Object.assign(a, { lista: listas.indexOf(a.app_id) >= 0 }));
+}
+
+function bienvenida_(no) {
+  const p = persona_(no);
+  const rol = rolBienvenida_(p);
+  const e = empleadosChecador_().find(x => x.no === String(no)) || {};
+  const push = rows_('Dispositivos').some(d => String(d.no_empleado) === String(no) && d.activo === 'SI');
+  const apps = rol === 'repartidor' ? appsPara_(no).filter(a => a.requerida) : [];
+  const pasos = [
+    { id: 'acceso', titulo: 'Crea tu acceso', detalle: 'RFC y PIN', hecho: !!p.pin_hash, auto: true },
+    { id: 'documentos', titulo: 'Sube tus documentos', detalle: 'Formulario de alta', hecho: !!p.onb_docs,
+      fecha: fmt_(p.onb_docs, 'yyyy-MM-dd') },
+  ];
+  if (rol === 'repartidor') pasos.push({ id: 'apps', titulo: 'Instala tus apps e inicia sesión', detalle: apps.filter(a => a.lista).length + ' de ' + apps.length + ' listas',
+    hecho: apps.length > 0 && apps.every(a => a.lista), listas: apps.filter(a => a.lista).length, total: apps.length,
+    faltan: apps.filter(a => !a.lista).map(a => a.nombre) });
+  pasos.push({ id: 'checador', titulo: 'Registra tu celular en el checador', detalle: 'QR del kiosco + tu huella', hecho: !!e.celular, auto: true });
+  pasos.push({ id: 'notificaciones', titulo: 'Activa las notificaciones', detalle: 'Para tu recibo y tu depósito', hecho: push, auto: true });
+  const hechos = pasos.filter(x => x.hecho).length;
+  const sig = pasos.find(x => !x.hecho);
+  return { rol: rol, rol_fijo: !!String(p.puesto || '').trim() || !!p.flotilla_id, pasos: pasos, hechos: hechos, total: pasos.length,
+    completa: hechos === pasos.length, siguiente: sig ? sig.titulo : '', form_documentos: config_('FORM_DOCUMENTOS', '') };
+}
+
+function elegirRol_(req, u) {
+  const p = persona_(u.no_empleado);
+  if (String(p.puesto || '').trim() || p.flotilla_id) throw new Error('Tu puesto ya lo definió RH');
+  if (['repartidor', 'otro'].indexOf(req.rol) < 0) throw new Error('Puesto inválido');
+  update_('Personal', p._row, { onb_rol: req.rol });
+  return bienvenida_(u.no_empleado);
+}
+
+function marcarApp_(req, u) {
+  return withLock_(() => {
+    const p = persona_(u.no_empleado);
+    const set = String(p.onb_apps || '').split(',').filter(String).filter(x => x !== req.app_id);
+    if (req.lista !== false) set.push(String(req.app_id));
+    update_('Personal', p._row, { onb_apps: set.join(',') });
+    return bienvenida_(u.no_empleado);
+  });
+}
+
+function marcarDocs_(no, si, u) {
+  const p = persona_(no);
+  update_('Personal', p._row, { onb_docs: si ? new Date() : '' });
+  bitacora_(u.no_empleado, si ? 'docs_enviados' : 'docs_pendientes', 'Personal', String(no), '');
+  if (si && u.no_empleado === String(no)) notificarAdmins_('bienvenida', '📄 Documentos de alta', p.nombre + ' dice que ya envió sus documentos por el formulario.', String(no), false);
+  return bienvenida_(no);
+}
+
+function recordarBienvenida_(req, u) {
+  const b = bienvenida_(req.no_empleado);
+  if (b.completa) throw new Error('Ya completó su bienvenida');
+  notificar_(String(req.no_empleado), 'bienvenida', '👋 Te falta terminar tu bienvenida', 'Siguiente paso: ' + b.siguiente + '. Ábrelo desde Inicio en el portal.', '');
+  bitacora_(u.no_empleado, 'recordar_bienvenida', 'Personal', String(req.no_empleado), b.siguiente);
+  return true;
+}
+
+function guardarApp_(req, u) {
+  return withLock_(() => {
+    const d = req.app || {};
+    const id = String(d.app_id || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    if (!id || !String(d.nombre || '').trim()) throw new Error('ID y nombre son obligatorios');
+    if (['playstore', 'apk', 'web'].indexOf(d.tipo) < 0) throw new Error('Tipo inválido');
+    const row = { app_id: id, nombre: d.nombre, descripcion: d.descripcion || '', icono: d.icono || '📱', color: d.color || '#2b4c78', tipo: d.tipo,
+      url_instalar: d.url_instalar || '', android_package: d.android_package || '', url_abrir: d.url_abrir || '', puestos: d.puestos === 'repartidor' ? 'repartidor' : 'todos',
+      requerida: d.requerida ? 'SI' : 'NO', acceso_directo: d.acceso_directo ? 'SI' : 'NO', orden: Number(d.orden || 999), activo: d.activo === false ? 'NO' : 'SI' };
+    const ex = rows_('Apps').find(a => String(a.app_id) === id);
+    if (ex) update_('Apps', ex._row, row); else append_('Apps', row);
+    bitacora_(u.no_empleado, 'guardar_app', 'Apps', id, '');
+    return true;
+  });
+}
+
 // ───────────────────────── Patrón: panel y personal ─────────────────────────
 
 function panel_() {
@@ -1234,6 +1367,7 @@ function panel_() {
       sin_salario: personal.filter(p => !Number(p.salario_diario)).length, sin_pin: personal.filter(p => !p.pin_hash).length,
       sin_horario: ag.empleados.filter(e => e.sin_horario).length,
     },
+    bienvenida_pendiente: personal.filter(p => !bienvenida_(p.no_empleado).completa).length,
     con_push: unicos_(rows_('Dispositivos').filter(d => d.activo === 'SI').map(d => String(d.no_empleado))).length,
     total_personal: personal.length,
   };
@@ -1251,6 +1385,7 @@ function personalAdmin_() {
       flotilla_id: p.flotilla_id, notas: p.notas, tiene_pin: !!p.pin_hash, bloqueado: p.pin_bloqueado === 'SI',
       ultimo_acceso: fmt_(p.ultimo_acceso, 'yyyy-MM-dd HH:mm'), push: disp.indexOf(String(p.no_empleado)) >= 0,
       en_checador: !!e.no, horario: e.no ? { entrada: e.entrada, dias: e.diasTxt, comida: e.comida } : null, celular_checador: !!e.celular,
+      bienvenida: p.estatus === 'baja' ? null : (b => ({ hechos: b.hechos, total: b.total, completa: b.completa }))(bienvenida_(p.no_empleado)),
     };
   }).sort((a, b) => (a.estatus === 'baja') - (b.estatus === 'baja') || String(a.nombre).localeCompare(String(b.nombre)));
 }

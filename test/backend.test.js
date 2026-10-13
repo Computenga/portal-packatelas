@@ -281,4 +281,44 @@ t('sincroniza empleados nuevos del checador', () => {
   assert.strictEqual(run('sincronizarPersonal').nuevos, 1);
 });
 
+t('bienvenida: pasos automáticos, docs, apps de repartidor y accesos', () => {
+  // Saidd es repartidor (puesto); Casandra es repartidora con flotilla_id; empleado 92 sin puesto
+  let b = ok(call('bienvenida', {}, tok4));
+  assert.strictEqual(b.rol, 'repartidor');
+  assert.deepStrictEqual(b.pasos.map(x => x.id), ['acceso', 'documentos', 'apps', 'checador', 'notificaciones']);
+  assert.deepStrictEqual(b.pasos.map(x => x.hecho), [true, false, false, false, true]); // ya registró push antes
+  b = ok(call('marcarDocs', {}, tok4));
+  assert(b.pasos[1].hecho);
+  const apps = ok(call('apps', {}, tok4));
+  assert(apps.find(a => a.app_id === 'packatelas' && a.tipo === 'apk'));
+  for (const a of apps.filter(a => a.requerida)) b = ok(call('marcarApp', { app_id: a.app_id }, tok4));
+  assert(b.pasos[2].hecho);
+  b = ok(call('marcarApp', { app_id: 'zello', lista: false }, tok4));
+  assert(!b.pasos[2].hecho && b.pasos[2].faltan[0] === 'Zello');
+  // checador: registrar celular en Empleados
+  empleados.data.find(r => r[0] === '4')[3] = 'cred-xyz';
+  ok(call('marcarApp', { app_id: 'zello' }, tok4));
+  b = ok(call('bienvenida', {}, tok4));
+  assert(b.completa, JSON.stringify(b.pasos.map(x => x.hecho)));
+  const i = ok(call('inicio', {}, tok4));
+  assert(i.bienvenida.completa && i.accesos.length >= 5 && i.accesos.every(a => a.acceso_directo));
+  // Oficina: sin paso de apps ni apps de repartidor
+  ok(call('guardarPersona', { persona: { no_empleado: '92', rfc: 'OEJO010101H11', puesto: 'Almacén' } }, admin));
+  const t92 = ok(call('primerAcceso', { rfc: 'OEJO010101H11', no_empleado: '92', pin: '246813' })).token;
+  b = ok(call('bienvenida', {}, t92));
+  assert.strictEqual(b.rol, 'otro');
+  assert(!b.pasos.find(x => x.id === 'apps'));
+  assert.strictEqual(ok(call('apps', {}, t92)).length, 0);
+  fail(call('elegirRol', { rol: 'repartidor' }, t92), /RH/);
+  // Patrón: avance en Personal, recordatorio, editar apps
+  const per = ok(call('personal', {}, admin));
+  assert.strictEqual(per.find(p => p.no_empleado === '4').bienvenida.completa, true);
+  ok(call('recordarBienvenida', { no_empleado: '92' }, admin));
+  assert(/bienvenida/.test(ok(call('bandeja', {}, t92))[0].titulo));
+  ok(call('guardarApp', { app: { app_id: 'Shipday', nombre: 'Shipday Drive', tipo: 'playstore', url_instalar: 'https://play.google.com/x', puestos: 'todos', requerida: true, acceso_directo: true, orden: 5 } }, admin));
+  assert.strictEqual(ok(call('apps', {}, t92))[0].app_id, 'shipday');
+  assert(ok(call('panel', {}, admin)).bienvenida_pendiente >= 1);
+  assert(/forms\.gle/.test(ok(call('configPublica', {})).form_documentos));
+});
+
 console.log(`\n${passed} pruebas OK`);

@@ -151,11 +151,27 @@ function pasoRfc(card) {
       session.lastRfc = v;
       if (r.estado === 'bloqueado') return fill(card, h('h3', {}, 'Acceso bloqueado'), h('p', { class: 'muted' }, 'Tu PIN se bloqueó por intentos fallidos. Pide a RH que lo reinicie.'), h('button', { class: 'btn block', onclick: () => pasoRfc(card) }, 'Regresar'));
       r.estado === 'nuevo' ? pasoNuevo(card, v) : pasoPin(card, v);
-    } catch (e) { toast(e.message, 'error', 5000); }
+    } catch (e) {
+      if (/no está dado de alta/.test(e.message)) return pasoAlta(card, v);
+      toast(e.message, 'error', 5000);
+    }
   };
   rfc.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
   fill(card, h('label', { class: 'label' }, 'RFC'), rfc, h('button', { class: 'btn primary block', onclick: go }, 'Continuar'),
-    h('p', { class: 'muted small center' }, '¿Primera vez? Escribe tu RFC y crea tu PIN.'));
+    h('p', { class: 'muted small center' }, '¿Primera vez? Escribe tu RFC y crea tu PIN.'),
+    h('button', { class: 'link center-block', onclick: () => pasoAlta(card, '') }, '¿Eres nuevo y aún no te dan de alta? Empieza aquí'));
+}
+
+/** Para quien todavía no está en Personal: primero sus documentos. */
+async function pasoAlta(card, rfc) {
+  let form = FORM_DOCS;
+  try { form = (await api('configPublica')).form_documentos || form; } catch {}
+  fill(card, h('h3', {}, '👋 Bienvenido a Packatelas'),
+    h('p', { class: 'muted' }, rfc ? `Tu RFC ${rfc} aún no está dado de alta. ` : '', 'Tu primer paso es mandar tus documentos. Con ellos RH te da de alta y después entras aquí con tu RFC.'),
+    docsChecklist(null),
+    h('a', { class: 'btn primary block', href: form, target: '_blank', rel: 'noopener' }, '📄 Abrir formulario de documentos ↗'),
+    h('p', { class: 'muted tiny' }, 'El formulario te pide entrar con una cuenta de Google para poder subir archivos.'),
+    h('button', { class: 'btn block', onclick: () => pasoRfc(card) }, 'Ya tengo acceso, entrar'));
 }
 
 function keypad(onDone, { len = 6, label } = {}) {
@@ -249,6 +265,10 @@ VIEWS.inicio = async function inicio() {
   fill(body,
     h('p', { class: 'muted cap' }, hoyLargo()),
     offline && h('div', { class: 'banner warn' }, 'Sin conexión: mostrando lo último que se cargó.'),
+    d.bienvenida && !d.bienvenida.completa && h('button', { class: 'card tap welcome', onclick: () => bienvenidaView() },
+      h('div', { class: 'row between' }, h('h3', {}, '👋 Tu bienvenida'), h('span', { class: 'muted small' }, `${d.bienvenida.hechos} de ${d.bienvenida.total}`)),
+      h('div', { class: 'bar' }, h('span', { style: `width:${Math.round(d.bienvenida.hechos / d.bienvenida.total * 100)}%` })),
+      h('p', { class: 'small' }, 'Siguiente: ', h('strong', {}, d.bienvenida.siguiente)), h('span', { class: 'btn primary sm' }, 'Continuar')),
     d.recibos_sin_firmar > 0 && h('button', { class: 'banner action warn', onclick: () => go('nomina') },
       h('strong', {}, `🧾 Tienes ${d.recibos_sin_firmar} recibo${d.recibos_sin_firmar > 1 ? 's' : ''} por firmar`), h('span', {}, 'Revísalo y confirma de recibido →')),
 
@@ -260,6 +280,7 @@ VIEWS.inicio = async function inicio() {
         hd && hd.min_tarde > 0 && h('span', { class: 'hero-late' }, `+${hd.min_tarde} min`),
         hd && hd.marcas.length > 1 && h('span', { class: 'muted small' }, hd.marcas.slice(1).map(m => `${TIPO_MARCA[m.tipo]} ${m.hora}`).join(' · ')))),
 
+    (d.accesos || []).length > 0 && [section('Accesos directos'), accesosGrid(d.accesos.slice(0, 7), true)],
     section(d.periodo.etiqueta),
     h('button', { class: 'kpis plain', onclick: () => go('asistencia') },
       kpi('Retrasos', hm(a.min_total), `${a.retardos + a.retardos_comida} vez(es)`, a.min_total ? 'warn' : ''),
@@ -288,6 +309,115 @@ VIEWS.inicio = async function inicio() {
       h('button', { class: 'q', onclick: () => documentosView() }, h('span', {}, '📄'), 'Documentos')),
   );
 };
+
+// ═════════ Bienvenida, apps y accesos ═════════
+const FORM_DOCS = 'https://forms.gle/qADGZZbjLRHhwjBo7';
+const DOCS = ['INE por ambos lados', 'CURP', 'Comprobante de domicilio reciente', 'Constancia de situación fiscal (RFC)', 'Número de Seguro Social', 'Foto tuya de frente'];
+const DOCS_REP = ['Licencia de conducir vigente'];
+const isAndroid = () => /android/i.test(navigator.userAgent);
+const absUrl = u => new URL(u, location.href).href;
+
+function docsChecklist(rol) {
+  const l = DOCS.concat(rol === 'otro' ? [] : DOCS_REP.map(d => d + (rol ? '' : ' (repartidores)')));
+  return h('div', { class: 'card soft' }, h('p', { class: 'small', style: 'margin-top:0' }, 'Ten a la mano (foto clara o PDF):'),
+    h('ul', { class: 'doclist' }, l.map(d => h('li', {}, d))));
+}
+
+/** Abre la app instalada (Android) o su página de instalación. */
+function abrirApp(a) {
+  const instalar = a.url_instalar ? absUrl(a.url_instalar) : '';
+  if (a.tipo === 'web') return window.open(a.url_abrir || instalar, '_blank', 'noopener');
+  if (isAndroid() && a.android_package) {
+    location.href = `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=${a.android_package};` +
+      (instalar ? `S.browser_fallback_url=${encodeURIComponent(instalar)};` : '') + 'end';
+    return;
+  }
+  const u = a.url_abrir || instalar;
+  if (u) window.open(u, '_blank', 'noopener');
+}
+
+async function instalarApp(a) {
+  if (a.tipo === 'apk') {
+    const ok = await modal('Instalar ' + a.nombre, h('div', {},
+      h('ol', { class: 'small steps-ol' },
+        h('li', {}, 'Toca ', h('b', {}, 'Descargar'), '. Es un archivo grande, espera a que termine.'),
+        h('li', {}, 'Abre el archivo desde la notificación de descarga.'),
+        h('li', {}, 'Si Android pide permiso para ', h('b', {}, 'instalar apps desconocidas'), ', actívalo para Chrome y regresa.'),
+        h('li', {}, 'Toca ', h('b', {}, 'Instalar'), ', ábrela e inicia sesión con los datos que te dé RH.')),
+      !isAndroid() && h('p', { class: 'banner warn small' }, 'Esta app solo funciona en celulares Android.')), [['Cancelar', false], ['Descargar', true, 'primary']]);
+    if (!ok) return;
+    const link = h('a', { href: absUrl(a.url_instalar), download: a.nombre.replace(/\W+/g, '') + '.apk' });
+    document.body.append(link); link.click(); link.remove();
+    return;
+  }
+  window.open(a.url_instalar || a.url_abrir, '_blank', 'noopener');
+}
+
+function appIcon(a, big) { return h('span', { class: 'app-ic' + (big ? ' big' : ''), style: `background:${a.color || '#2b4c78'}` }, a.icono || '📱'); }
+
+function accesosGrid(list, conVerTodo) {
+  return h('div', { class: 'acc-grid' },
+    list.map(a => h('button', { class: 'acc', onclick: () => abrirApp(a) }, appIcon(a, true), h('span', {}, a.nombre))),
+    conVerTodo && h('button', { class: 'acc', onclick: () => appsView('accesos') }, h('span', { class: 'app-ic big more' }, '＋'), h('span', {}, 'Ver todo')));
+}
+
+async function appsView(tab = 'instalar', back) {
+  const prev = state.tab;
+  back = back || (() => go(prev));
+  const body = h('div', {}, loading());
+  screen('Apps', body, { back });
+  let l;
+  try { l = await api('apps'); } catch (e) { return fill(body, errorBox(e)); }
+  const draw = () => fill(body,
+    segmented([['instalar', 'Instalar'], ['accesos', 'Accesos']], tab, t => { tab = t; draw(); }),
+    !l.length ? empty('📱', 'No hay apps para tu puesto.') : tab === 'accesos'
+      ? [accesosGrid(l, false), h('p', { class: 'muted small' }, isAndroid() ? 'Si la app no está instalada, te lleva a instalarla.' : 'En iPhone algunas abren su página en la tienda.')]
+      : [h('p', { class: 'muted small' }, 'Instala cada una, inicia sesión y toca "Ya la tengo".'),
+        l.map(a => h('div', { class: 'app-row' + (a.lista ? ' ok' : '') }, appIcon(a),
+          h('div', { class: 'grow' }, h('strong', {}, a.nombre, a.requerida ? '' : h('small', { class: 'muted' }, ' · opcional')), h('small', { class: 'muted block' }, a.descripcion || '')),
+          h('div', { class: 'app-act' },
+            a.tipo === 'web' ? h('button', { class: 'btn sm', onclick: () => abrirApp(a) }, 'Abrir')
+              : h('button', { class: 'btn sm primary', onclick: () => instalarApp(a) }, a.tipo === 'apk' ? 'Descargar' : 'Instalar'),
+            h('button', { class: 'chk' + (a.lista ? ' on' : ''), onclick: async () => {
+              try { await api('marcarApp', { app_id: a.app_id, lista: !a.lista }); a.lista = !a.lista; draw(); } catch (e) { toast(e.message, 'error'); }
+            } }, a.lista ? '✓ Lista' : 'Ya la tengo'))))]);
+  draw();
+}
+
+async function bienvenidaView() {
+  const prev = state.tab === 'mas' ? 'mas' : 'inicio';
+  const body = h('div', {}, loading());
+  screen('Tu bienvenida', body, { back: () => go(prev) });
+  let b;
+  try { b = await api('bienvenida'); } catch (e) { return fill(body, errorBox(e)); }
+  if (!b.rol) return fill(body, h('div', { class: 'card' }, h('h3', {}, '¿Cuál es tu puesto?'), h('p', { class: 'muted' }, 'Así te mostramos solo los pasos que te tocan.'),
+    h('div', { class: 'grid2' }, [['repartidor', '🛵 Repartidor'], ['otro', '🏢 Otro puesto']].map(([k, l]) => h('button', { class: 'btn block', onclick: async () => {
+      try { await busy('Guardando…', () => api('elegirRol', { rol: k })); bienvenidaView(); } catch (e) { toast(e.message, 'error'); }
+    } }, l)))));
+  const actual = b.pasos.findIndex(x => !x.hecho);
+  const accion = x => {
+    if (x.id === 'documentos') return [docsChecklist(b.rol),
+      h('a', { class: 'btn primary', href: b.form_documentos || FORM_DOCS, target: '_blank', rel: 'noopener' }, 'Abrir formulario ↗'), ' ',
+      h('button', { class: 'btn', onclick: async () => { try { await busy('Guardando…', () => api('marcarDocs')); bienvenidaView(); } catch (e) { toast(e.message, 'error'); } } }, 'Ya lo envié'),
+      h('p', { class: 'muted tiny' }, 'El formulario te pide entrar con una cuenta de Google para subir archivos.')];
+    if (x.id === 'apps') return [x.faltan && x.faltan.length ? h('p', { class: 'small' }, 'Te faltan: ', x.faltan.join(', ')) : null,
+      h('button', { class: 'btn primary', onclick: () => appsView('instalar', () => bienvenidaView()) }, 'Ver apps')];
+    if (x.id === 'checador') return [h('ol', { class: 'small steps-ol' }, h('li', {}, 'En la base, pide a RH que te registre en el kiosco del checador.'),
+      h('li', {}, 'Escanea el QR del kiosco con la cámara de tu celular.'), h('li', {}, 'Toca "Checar con huella" y pon tu dedo.')),
+      h('button', { class: 'btn', onclick: () => bienvenidaView() }, 'Ya lo hice, revisar')];
+    if (x.id === 'notificaciones') return pushCard() || h('button', { class: 'btn', onclick: () => bienvenidaView() }, 'Revisar');
+    return null;
+  };
+  fill(body,
+    b.completa ? h('div', { class: 'card done-card' }, h('div', { class: 'big-emoji' }, '🎉'), h('h3', {}, '¡Listo, terminaste tu bienvenida!'), h('p', { class: 'muted' }, 'Ya tienes todo para trabajar. Tus apps están en Accesos directos.'))
+      : h('div', {}, h('div', { class: 'bar' }, h('span', { style: `width:${Math.round(b.hechos / b.total * 100)}%` })), h('p', { class: 'muted small' }, `${b.hechos} de ${b.total} pasos · ${b.rol === 'repartidor' ? 'Repartidor' : 'Oficina / otro puesto'}`)),
+    b.pasos.map((x, i) => h('div', { class: 'step ' + (x.hecho ? 'done' : i === actual ? 'todo' : 'locked') },
+      h('div', { class: 'step-n' }, x.hecho ? '✓' : i + 1),
+      h('div', { class: 'step-body' }, h('h3', {}, x.titulo),
+        h('p', { class: 'muted' }, x.hecho ? (x.auto ? 'Listo' : x.fecha ? 'Listo · ' + fecha(x.fecha) : 'Listo') : x.detalle),
+        !x.hecho && i === actual && accion(x),
+        x.hecho && x.id === 'apps' && h('button', { class: 'link', onclick: () => appsView('instalar', () => bienvenidaView()) }, 'Ver mis apps')))));
+}
 
 VIEWS.asistencia = async function asistencia(periodo, noEmpleado, nombre) {
   periodo = periodo || periodoDe(new Date());
@@ -480,6 +610,8 @@ VIEWS.mas = async function mas() {
     isAdmin() && h('button', { class: 'card tap row between switch', onclick: () => { session.modo = 'patron'; start(); } },
       h('div', {}, h('h3', {}, '🏢 Cambiar a modo patrón'), h('p', { class: 'muted small' }, 'Panel, prenómina, recibos, pagos y personal')), h('span', { class: 'chev' }, '›')),
     menu([
+      ['👋', 'Mi bienvenida', 'Pasos para empezar a trabajar', bienvenidaView],
+      ['📱', 'Apps y accesos', 'Instala y abre tus apps de trabajo', () => appsView('instalar')],
       ['👤', 'Mis datos', 'RFC, CLABE, horario, antigüedad', perfilView],
       ['💳', 'Adeudos y cargos', 'Préstamos, anticipos y cargos de flotilla', adeudosView],
       ['📄', 'Mis documentos', 'Contrato, constancias y más', documentosView],
@@ -568,7 +700,7 @@ async function bandeja() {
   screen('Notificaciones', body, { back: () => go(prev) });
   try {
     const l = await api('bandeja');
-    const ICON = { recibo: '🧾', pago: '💸', solicitud: '📝', aviso: '📢', adeudo: '💳', documento: '📄', alerta: '⚠️' };
+    const ICON = { bienvenida: '👋', recibo: '🧾', pago: '💸', solicitud: '📝', aviso: '📢', adeudo: '💳', documento: '📄', alerta: '⚠️' };
     fill(body,
       l.some(n => !n.leido) && h('div', { class: 'row', style: 'justify-content:flex-end' }, h('button', { class: 'link', onclick: async () => { await api('marcarLeido', { todos: true }); setBadge(0); bandeja(); } }, 'Marcar todo como leído')),
       l.length ? l.map(n => h('button', { class: 'card tap notif' + (n.leido ? '' : ' unread'), onclick: async () => {
@@ -578,6 +710,7 @@ async function bandeja() {
         if (n.tipo === 'solicitud') return go(modoPatron() ? 'pmas' : 'solicitudes');
         if (n.tipo === 'documento') return documentosView();
         if (n.tipo === 'adeudo') return adeudosView();
+        if (n.tipo === 'bienvenida' && !modoPatron()) return bienvenidaView();
         n.leido = true; bandeja();
       } }, h('span', { class: 'n-i' }, ICON[n.tipo] || '🔔'),
         h('span', { class: 'n-b' }, h('strong', {}, String(n.titulo).replace(/^\p{Extended_Pictographic}\uFE0F?\s*/u, '')), h('span', { class: 'small' }, n.mensaje), h('span', { class: 'muted tiny' }, fechaHora(n.fecha)))))
@@ -603,6 +736,7 @@ VIEWS.panel = async function panel() {
   fill(body,
     h('p', { class: 'muted cap' }, hoyLargo()),
     faltan.length > 0 && h('button', { class: 'banner action warn', onclick: () => go('personal', 'incompletos') }, h('strong', {}, 'Completa los expedientes'), h('span', {}, faltan.join(' · ') + ' →')),
+    d.bienvenida_pendiente > 0 && h('button', { class: 'banner action info', onclick: () => go('personal', 'bienvenida') }, h('strong', {}, `👋 ${d.bienvenida_pendiente} sin terminar su bienvenida`), h('span', {}, 'Ver quiénes →')),
     d.solicitudes_pendientes > 0 && h('button', { class: 'banner action info', onclick: () => solicitudesAdmin() }, h('strong', {}, `📝 ${d.solicitudes_pendientes} solicitud(es) por resolver`), h('span', {}, 'Revisar →')),
     n.pagos_no_cuadran > 0 && h('button', { class: 'banner action error', onclick: () => go('pnomina', 'pagos') }, h('strong', {}, `⚠️ ${n.pagos_no_cuadran} depósito(s) no cuadran con su recibo`), h('span', {}, 'Revisar →')),
 
@@ -803,7 +937,7 @@ VIEWS.personal = async function personal(filtro = 'activos', q = '') {
   const list = h('div');
   const draw = () => {
     const s = search.value.trim().toLowerCase();
-    const r = l.filter(p => (filtro === 'activos' ? p.estatus !== 'baja' : filtro === 'incompletos' ? p.estatus !== 'baja' && incompleto(p) : filtro === 'bajas' ? p.estatus === 'baja' : true)
+    const r = l.filter(p => (filtro === 'activos' ? p.estatus !== 'baja' : filtro === 'incompletos' ? p.estatus !== 'baja' && incompleto(p) : filtro === 'bienvenida' ? p.bienvenida && !p.bienvenida.completa : filtro === 'bajas' ? p.estatus === 'baja' : true)
       && (!s || p.nombre.toLowerCase().includes(s) || p.no_empleado === s));
     fill(list, r.length ? r.map(p => h('button', { class: 'card tap person', onclick: () => personaView(p) },
       h('div', { class: 'avatar sm' + (p.estatus === 'baja' ? ' off' : '') }, iniciales(p.nombre)),
@@ -812,11 +946,12 @@ VIEWS.personal = async function personal(filtro = 'activos', q = '') {
           !p.rfc && h('span', { class: 'badge b-warn' }, 'Sin RFC'), !p.clabe && h('span', { class: 'badge b-warn' }, 'Sin CLABE'),
           !p.salario_diario && h('span', { class: 'badge b-warn' }, 'Sin salario'), !p.horario?.entrada && h('span', { class: 'badge b-warn' }, 'Sin horario'),
           p.bloqueado ? h('span', { class: 'badge b-err' }, 'Bloqueado') : p.tiene_pin ? h('span', { class: 'badge b-ok' }, 'Con acceso') : h('span', { class: 'badge' }, 'Sin acceso'),
+          p.bienvenida && h('span', { class: 'badge b-' + (p.bienvenida.completa ? 'ok' : 'warn') }, p.bienvenida.completa ? 'Bienvenida ✓' : `Bienvenida ${p.bienvenida.hechos}/${p.bienvenida.total}`),
           p.push && h('span', { class: 'badge b-info' }, '🔔'))),
       h('span', { class: 'chev' }, '›'))) : empty('👥', 'Nadie en este filtro.'));
   };
   search.addEventListener('input', draw);
-  fill(body, h('div', { class: 'chips' }, [['activos', 'Activos'], ['incompletos', `Incompletos (${l.filter(p => p.estatus !== 'baja' && incompleto(p)).length})`], ['bajas', 'Bajas'], ['todos', 'Todos']].map(([k, t]) =>
+  fill(body, h('div', { class: 'chips' }, [['activos', 'Activos'], ['incompletos', `Incompletos (${l.filter(p => p.estatus !== 'baja' && incompleto(p)).length})`], ['bienvenida', `Bienvenida (${l.filter(p => p.bienvenida && !p.bienvenida.completa).length})`], ['bajas', 'Bajas'], ['todos', 'Todos']].map(([k, t]) =>
     h('button', { class: 'chip ' + (filtro === k ? 'on' : ''), onclick: () => VIEWS.personal(k, search.value) }, t))), search, list,
     h('p', { class: 'muted small' }, 'Los empleados nuevos del checador aparecen aquí solos (cada hora). Horario y celular se editan en el kiosco del checador.'));
   draw();
@@ -840,6 +975,7 @@ async function personaView(p) {
         if (!await confirmar('Reiniciar PIN', `${p.nombre} volverá a crear su PIN con su RFC y número de empleado. Se cierran sus sesiones.`, 'Reiniciar')) return;
         try { await busy('Reiniciando…', () => api('resetPin', { no_empleado: p.no_empleado })); toast('PIN reiniciado', 'ok'); go('personal'); } catch (e) { toast(e.message, 'error'); }
       } }, h('span', {}, '🔑'), 'Reset PIN')),
+    !nuevo && p.estatus !== 'baja' && [section('Bienvenida'), bienvenidaAdminBox(p)],
     section('Identificación'),
     nuevo && inp('no_empleado', 'No. de empleado', { inputmode: 'numeric' }),
     inp('nombre', 'Nombre completo'),
@@ -862,6 +998,58 @@ async function personaView(p) {
       try { await busy('Guardando…', () => api('guardarPersona', { persona })); toast('Guardado', 'ok'); go('personal'); } catch (e) { toast(e.message, 'error', 5000); }
     } }, 'Guardar'));
   screen(nuevo ? 'Nuevo empleado' : 'Expediente', body, { back: () => go('personal') });
+}
+
+function bienvenidaAdminBox(p) {
+  const box = h('div', { class: 'card' }, loading());
+  const load = async () => {
+    try {
+      const b = await api('bienvenidaDe', { no_empleado: p.no_empleado });
+      const docs = b.pasos.find(x => x.id === 'documentos');
+      fill(box, b.pasos.map(x => h('div', { class: 'kv' }, h('span', {}, (x.hecho ? '✅ ' : '⬜ ') + x.titulo), h('span', { class: 'muted small' }, x.hecho ? (x.fecha ? fecha(x.fecha) : 'listo') : (x.faltan ? 'faltan ' + x.faltan.length : 'pendiente')))),
+        h('div', { class: 'row wrap', style: 'gap:8px;margin-top:10px' },
+          h('button', { class: 'btn sm', onclick: async () => { try { await api('docsRecibidos', { no_empleado: p.no_empleado, recibidos: !docs.hecho }); load(); } catch (e) { toast(e.message, 'error'); } } },
+            docs.hecho ? 'Marcar docs como pendientes' : '✓ Recibí sus documentos'),
+          !b.completa && h('button', { class: 'btn sm primary', onclick: async () => { try { await busy('Enviando…', () => api('recordarBienvenida', { no_empleado: p.no_empleado })); toast('Recordatorio enviado', 'ok'); } catch (e) { toast(e.message, 'error'); } } }, '🔔 Recordarle')),
+        b.rol === '' && h('p', { class: 'muted tiny' }, 'Sin puesto: el empleado elegirá si es repartidor. Captura el puesto abajo para decidirlo tú.'));
+    } catch (e) { fill(box, errorBox(e)); }
+  };
+  load();
+  return box;
+}
+
+async function appsAdmin() {
+  state.tab = 'pmas';
+  const body = h('div', {}, loading());
+  screen('Apps y accesos', body, { back: () => go('pmas'), actions: h('button', { class: 'icon-btn', 'aria-label': 'Nueva', onclick: () => editarApp(null) }, '＋') });
+  try {
+    const l = await api('appsAdmin');
+    fill(body, h('p', { class: 'muted small' }, 'Lo que ven los empleados en Bienvenida → Instalar y en Accesos directos. "Requerida" cuenta para terminar la bienvenida.'),
+      l.map(a => h('button', { class: 'card tap app-row' + (a.activo ? '' : ' off'), onclick: () => editarApp(a) }, appIcon(a),
+        h('div', { class: 'grow' }, h('strong', {}, a.nombre), h('small', { class: 'muted block' }, `${a.tipo} · ${a.puestos === 'todos' ? 'todos los puestos' : 'repartidores'}`),
+          h('div', { class: 'row wrap gap4', style: 'margin-top:4px' }, a.requerida && h('span', { class: 'badge b-warn' }, 'Requerida'), a.acceso_directo && h('span', { class: 'badge b-info' }, 'Acceso directo'), !a.activo && h('span', { class: 'badge' }, 'Oculta'))),
+        h('span', { class: 'chev' }, '›'))));
+  } catch (e) { fill(body, errorBox(e)); }
+}
+
+async function editarApp(a) {
+  const nueva = !a;
+  a = a || { tipo: 'playstore', puestos: 'repartidor', requerida: true, acceso_directo: true, activo: true, icono: '📱', color: '#2b4c78', orden: 999 };
+  const f = {};
+  const inp = (k, label, attrs = {}) => { f[k] = h('input', { class: 'input', value: a[k] ?? '', ...attrs }); return h('div', {}, h('label', { class: 'label' }, label), f[k]); };
+  const sel = (k, label, ops) => { f[k] = h('select', { class: 'input' }, ops.map(([v, t]) => h('option', { value: v, selected: a[k] === v || null }, t))); return h('div', {}, h('label', { class: 'label' }, label), f[k]); };
+  const chk = (k, label) => { f[k] = h('input', { type: 'checkbox', checked: a[k] || null }); return h('label', { class: 'row small', style: 'margin:6px 0' }, f[k], ' ' + label); };
+  const ok = await modal(nueva ? 'Nueva app' : a.nombre, h('div', { class: 'scroll-sheet' },
+    nueva && inp('app_id', 'ID (sin espacios)'), inp('nombre', 'Nombre'), inp('descripcion', 'Para qué sirve'),
+    h('div', { class: 'grid2' }, inp('icono', 'Ícono (emoji)'), inp('color', 'Color', { type: 'color' })),
+    h('div', { class: 'grid2' }, sel('tipo', 'Tipo', [['playstore', 'Play Store'], ['apk', 'APK propio'], ['web', 'Página web']]), sel('puestos', 'Para', [['repartidor', 'Repartidores'], ['todos', 'Todos']])),
+    inp('url_instalar', 'Link para instalar (Play Store, APK o página)'), inp('android_package', 'Paquete Android (para abrirla, ej. com.waze)'),
+    inp('url_abrir', 'Link para abrir en iPhone / web (opcional)'), inp('orden', 'Orden', { type: 'number' }),
+    chk('requerida', 'Requerida en la bienvenida'), chk('acceso_directo', 'Mostrar en Accesos directos'), chk('activo', 'Visible')), [['Cancelar', false], ['Guardar', true, 'primary']]);
+  if (!ok) return;
+  const app = { app_id: nueva ? f.app_id.value : a.app_id };
+  Object.keys(f).forEach(k => { if (k !== 'app_id') app[k] = f[k].type === 'checkbox' ? f[k].checked : f[k].value; });
+  try { await busy('Guardando…', () => api('guardarApp', { app })); toast('Guardado', 'ok'); appsAdmin(); } catch (e) { toast(e.message, 'error', 5000); }
 }
 
 async function subirDoc(p) {
@@ -902,6 +1090,7 @@ VIEWS.pmas = function pmas() {
       ['📝', 'Solicitudes', 'Justificantes, vacaciones, permisos, anticipos', () => solicitudesAdmin()],
       ['📢', 'Avisos', 'Comunicados por notificación', enviarAvisoView],
       ['💳', 'Adeudos y cargos', 'Préstamos y cargos de flotilla', () => adeudosAdmin()],
+      ['📱', 'Apps y accesos', 'Apps que instalan y abren los empleados', appsAdmin],
       ['🔔', 'Mis notificaciones', '', () => bandeja()],
       ['🔑', 'Cambiar PIN', '', cambiarPin],
     ]),

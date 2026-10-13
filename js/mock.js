@@ -134,6 +134,34 @@ function emitir(perId, filas) {
   notificar('1', 'solicitud', '📝 Nueva solicitud: Justificante de falta', 'Jonatan Ortega · ' + hoy, 'SOL-00003');
 })();
 
+const APPS = [
+  ['packatelas', 'Packatelas', 'Escaneo de paquetes', '📦', '#1f3a5f', 'apk', 'apps/packatelas.apk', 'app.packatelas.mx', '', 'repartidor', true, true],
+  ['whatsapp', 'WhatsApp Business', 'Comunicación con clientes', '💬', '#25a35a', 'playstore', 'https://play.google.com/store/apps/details?id=com.whatsapp.w4b', 'com.whatsapp.w4b', 'https://wa.me/', 'repartidor', true, true],
+  ['zello', 'Zello', 'Radio con el equipo', '📻', '#e8732c', 'playstore', 'https://play.google.com/store/apps/details?id=com.loudtalks', 'com.loudtalks', '', 'repartidor', true, true],
+  ['mydriver', 'My Driver', 'Entregas asignadas', '🚚', '#1d4e6b', 'playstore', 'https://play.google.com/store/search?q=My%20Driver&c=apps', '', '', 'repartidor', true, true],
+  ['flex', 'Envíos Flex', 'Mercado Libre', '🟨', '#e0b800', 'playstore', 'https://play.google.com/store/search?q=Envios%20Flex&c=apps', '', '', 'repartidor', true, true],
+  ['waze', 'Waze', 'Navegación', '🧭', '#33ccff', 'playstore', 'https://play.google.com/store/apps/details?id=com.waze', 'com.waze', 'https://waze.com/ul', 'repartidor', true, true],
+  ['maps', 'Google Maps', 'Navegación y direcciones', '🗺️', '#34a853', 'playstore', 'https://play.google.com/store/apps/details?id=com.google.android.apps.maps', 'com.google.android.apps.maps', 'https://maps.google.com/', 'repartidor', true, true],
+  ['telefono', 'Teléfono de Google', 'Llamadas', '📞', '#1a73e8', 'playstore', 'https://play.google.com/store/apps/details?id=com.google.android.dialer', 'com.google.android.dialer', '', 'repartidor', true, false],
+  ['mensajes', 'Mensajes de Google', 'SMS', '✉️', '#1a73e8', 'playstore', 'https://play.google.com/store/apps/details?id=com.google.android.apps.messaging', 'com.google.android.apps.messaging', '', 'repartidor', true, false],
+  ['flotilla', 'Flotilla', 'Check de moto, gasolina y fallas', '🛵', '#2b4c78', 'web', 'https://computenga.github.io/flotilla-packatelas/', '', 'https://computenga.github.io/flotilla-packatelas/', 'repartidor', false, true],
+].map(([app_id, nombre, descripcion, icono, color, tipo, url_instalar, android_package, url_abrir, puestos, requerida, acceso_directo], i) =>
+  ({ app_id, nombre, descripcion, icono, color, tipo, url_instalar, android_package, url_abrir, puestos, requerida, acceso_directo, orden: (i + 1) * 10, activo: true }));
+const onb = { '4': { docs: '2026-10-12', apps: ['whatsapp', 'zello', 'waze', 'maps', 'telefono'], celular: true }, '75': { docs: '', apps: [], celular: true }, '5': { docs: '2026-09-01', apps: [], celular: true } };
+const esRep = p => /repart/i.test(p.puesto || '') || !!p.flotilla_id;
+function appsPara(p) { const o = onb[p.no_empleado] || {}; return APPS.filter(a => a.activo && (a.puestos === 'todos' || (a.puestos === 'repartidor' && esRep(p)))).sort((a, b) => a.orden - b.orden).map(a => ({ ...a, lista: (o.apps || []).includes(a.app_id) })); }
+function bienv(p) {
+  const o = onb[p.no_empleado] = onb[p.no_empleado] || { docs: '', apps: [], celular: false };
+  const rol = p.puesto ? (esRep(p) ? 'repartidor' : 'otro') : (o.rol || '');
+  const req = rol === 'repartidor' ? appsPara(p).filter(a => a.requerida) : [];
+  const pasos = [{ id: 'acceso', titulo: 'Crea tu acceso', detalle: 'RFC y PIN', hecho: !!p.pin, auto: true },
+    { id: 'documentos', titulo: 'Sube tus documentos', detalle: 'Formulario de alta', hecho: !!o.docs, fecha: o.docs }];
+  if (rol === 'repartidor') pasos.push({ id: 'apps', titulo: 'Instala tus apps e inicia sesión', detalle: `${req.filter(a => a.lista).length} de ${req.length} listas`, hecho: req.every(a => a.lista), faltan: req.filter(a => !a.lista).map(a => a.nombre) });
+  pasos.push({ id: 'checador', titulo: 'Registra tu celular en el checador', detalle: 'QR del kiosco + tu huella', hecho: !!o.celular, auto: true });
+  pasos.push({ id: 'notificaciones', titulo: 'Activa las notificaciones', detalle: 'Para tu recibo y tu depósito', hecho: dispositivos.has(p.no_empleado), auto: true });
+  const hechos = pasos.filter(x => x.hecho).length;
+  return { rol, pasos, hechos, total: pasos.length, completa: hechos === pasos.length, siguiente: (pasos.find(x => !x.hecho) || {}).titulo || '', form_documentos: 'https://forms.gle/qADGZZbjLRHhwjBo7' };
+}
 const sessions = {};
 function me(token) { const no = sessions[token] || (token && token.startsWith('demo-') ? token.slice(5) : null); const p = personal.find(x => x.no_empleado === no); if (!p) throw new Error('Sesión requerida'); return p; }
 const user = p => ({ no_empleado: p.no_empleado, nombre: p.nombre, rol: p.rol, puesto: p.puesto });
@@ -142,7 +170,7 @@ const pickR = r => ({ ...r });
 export function handle(action, d, token) {
   const ADMIN = () => { const p = me(token); if (p.rol !== 'admin') throw new Error('Sin permiso para esta acción'); return p; };
   switch (action) {
-    case 'estadoRfc': { const p = personal.find(x => x.rfc === d.rfc); if (!p) { if (/^[A-Z]{4}\d{6}/.test(d.rfc)) { personal.find(x => x.no_empleado === '5').rfc = d.rfc; return { estado: 'nuevo' }; } throw new Error('Ese RFC no está dado de alta. Pídele a RH que lo registre.'); } return { estado: p.pin ? 'activo' : 'nuevo' }; }
+    case 'estadoRfc': { const p = personal.find(x => x.rfc === d.rfc); if (!p) { if (!d.rfc.startsWith('XAXX') && /^[A-Z]{4}\d{6}/.test(d.rfc)) { personal.find(x => x.no_empleado === '5').rfc = d.rfc; return { estado: 'nuevo' }; } throw new Error('Ese RFC no está dado de alta. Pídele a RH que lo registre.'); } return { estado: p.pin ? 'activo' : 'nuevo' }; }
     case 'primerAcceso': { const p = personal.find(x => x.rfc === d.rfc); if (!p || p.no_empleado !== d.no_empleado) throw new Error('El RFC y el número de empleado no coinciden'); p.pin = d.pin; return { token: 'demo-' + p.no_empleado, usuario: user(p) }; }
     case 'login': { const p = personal.find(x => x.rfc === d.rfc); if (!p || p.pin !== d.pin) throw new Error('RFC o PIN incorrecto. Te quedan 4 intento(s).'); return { token: 'demo-' + p.no_empleado, usuario: user(p) }; }
     case 'inicio': {
@@ -152,7 +180,8 @@ export function handle(action, d, token) {
         no_leidos: bandeja.filter(n => n.no_empleado === p.no_empleado && !n.leido).length,
         saldo_adeudos: adeudos.filter(x => x.no_empleado === p.no_empleado && x.estatus === 'activo').reduce((s, x) => s + x.saldo, 0),
         cargos_pendientes: p.flotilla_id ? cargos.filter(c => c.responsable_id === p.flotilla_id && !c.cobrado).reduce((s, c) => s + c.monto, 0) : 0,
-        solicitudes_pendientes: solicitudes.filter(s => s.no_empleado === p.no_empleado && s.estatus === 'pendiente').length };
+        solicitudes_pendientes: solicitudes.filter(s => s.no_empleado === p.no_empleado && s.estatus === 'pendiente').length,
+        bienvenida: bienv(p), accesos: appsPara(p).filter(a => a.acceso_directo) };
     }
     case 'perfil': { const p = me(token); const ing = p.ingreso || ''; const anios = ing ? Math.floor((HOY - new Date(ing)) / 3.156e10) : 0;
       return { ...p, fecha_ingreso: ing, antiguedad: ing ? `${anios} año(s)` : '', clabe: p.clabe ? '•••• ' + p.clabe.slice(-4) : '', banco: p.clabe ? 'BBVA' : '', horario: { entrada: p.entrada, dias: p.dias, comida: p.entrada ? 60 : '' }, celular_checador: true,
@@ -177,6 +206,17 @@ export function handle(action, d, token) {
     case 'marcarLeido': { const p = me(token); bandeja.forEach(n => { if (n.no_empleado === p.no_empleado && (d.todos || (d.ids || []).includes(n.notif_id))) n.leido = true; }); return true; }
     case 'documentos': return [{ id: 'd1', nombre: 'Contrato individual de trabajo.pdf', mime: 'application/pdf', fecha: '2025-03-10', tamano: 182000 }, { id: 'd2', nombre: 'Constancia de situación fiscal.pdf', mime: 'application/pdf', fecha: '2025-03-10', tamano: 96000 }];
     case 'documento': throw new Error('En la demostración no se descargan archivos.');
+    case 'bienvenida': return bienv(me(token));
+    case 'elegirRol': { const p = me(token); bienv(p); onb[p.no_empleado].rol = d.rol; return bienv(p); }
+    case 'marcarApp': { const p = me(token); bienv(p); const o = onb[p.no_empleado]; o.apps = o.apps.filter(x => x !== d.app_id); if (d.lista !== false) o.apps.push(d.app_id); return bienv(p); }
+    case 'marcarDocs': { const p = me(token); bienv(p); onb[p.no_empleado].docs = hoy; return bienv(p); }
+    case 'apps': return appsPara(me(token));
+    case 'configPublica': return { form_documentos: 'https://forms.gle/qADGZZbjLRHhwjBo7' };
+    case 'bienvenidaDe': ADMIN(); return bienv(personal.find(p => p.no_empleado === d.no_empleado));
+    case 'docsRecibidos': ADMIN(); { const p = personal.find(x => x.no_empleado === d.no_empleado); bienv(p); onb[p.no_empleado].docs = d.recibidos ? hoy : ''; return bienv(p); }
+    case 'recordarBienvenida': ADMIN(); notificar(d.no_empleado, 'bienvenida', '👋 Te falta terminar tu bienvenida', 'Siguiente paso: ' + bienv(personal.find(p => p.no_empleado === d.no_empleado)).siguiente, ''); return true;
+    case 'appsAdmin': ADMIN(); return APPS;
+    case 'guardarApp': ADMIN(); { const x = APPS.find(a => a.app_id === d.app.app_id); if (x) Object.assign(x, d.app, { orden: Number(d.app.orden) }); else APPS.push({ ...d.app, orden: Number(d.app.orden) }); return true; }
     case 'registerDevice': dispositivos.add(me(token).no_empleado); return true;
     case 'cambiarPin': { const p = me(token); if (d.actual !== p.pin) throw new Error('Tu PIN actual no es correcto'); p.pin = d.nuevo; return { token, usuario: user(p) }; }
 
@@ -194,7 +234,7 @@ export function handle(action, d, token) {
           sin_pagar: recibos.filter(r => r.estatus === 'emitido').length, pagos_semana: pagos.reduce((s, p) => s + p.monto, 0), pagos_no_cuadran: pagos.filter(p => p.cuadra === 'NO').length },
         solicitudes_pendientes: solicitudes.filter(s => s.estatus === 'pendiente').length,
         datos_faltantes: { sin_rfc: personal.filter(p => !p.rfc).length, sin_clabe: personal.filter(p => !p.clabe).length, sin_salario: personal.filter(p => !p.salario_diario).length, sin_pin: personal.filter(p => !p.pin).length, sin_horario: personal.filter(p => !p.entrada).length },
-        con_push: dispositivos.size, total_personal: personal.length };
+        con_push: dispositivos.size, total_personal: personal.length, bienvenida_pendiente: personal.filter(p => !bienv(p).completa).length };
     }
     case 'asistenciaGeneral': ADMIN(); return { periodo: periodo(d.periodo), hoy, empleados: personal.map(p => { const a = asistencia(p.no_empleado, d.periodo); const x = a.dias.find(y => y.fecha === hoy);
       return { no_empleado: p.no_empleado, nombre: p.nombre, puesto: p.puesto, sin_horario: a.sin_horario, totales: a.totales, hoy: x ? { estado: x.estado, entrada: x.entrada, min_tarde: x.min_tarde, debia: x.debia, laboral: x.laboral } : null }; })
@@ -207,7 +247,7 @@ export function handle(action, d, token) {
     case 'asignarPago': ADMIN(); { const p = pagos.find(x => x.pago_id === d.pago_id); p.recibo_id = d.recibo_id; p.cuadra = d.recibo_id ? 'MANUAL' : 'SIN RECIBO'; return true; }
     case 'pagoManual': ADMIN(); { const p = personal.find(x => x.no_empleado === d.no_empleado); pagos.unshift({ pago_id: 'PAG-' + (++seq), fecha: ahora(), no_empleado: p.no_empleado, nombre: p.nombre, monto: Number(d.monto), concepto: d.concepto, clave_rastreo: 'MANUAL', recibo_id: '', cuadra: 'SIN RECIBO', origen: 'manual' }); return 'ok'; }
     case 'revisarAhora': ADMIN(); return { revisados: 37, pagos_nuevos: 0, transferencias_a_otros: 31 };
-    case 'personal': ADMIN(); return personal.map(p => ({ ...p, estatus: 'activo', tiene_pin: !!p.pin, bloqueado: false, push: dispositivos.has(p.no_empleado), horario: p.entrada ? { entrada: p.entrada, dias: p.dias, comida: 60 } : null, celular_checador: true, fecha_ingreso: p.ingreso || '' }));
+    case 'personal': ADMIN(); return personal.map(p => ({ ...p, bienvenida: (b => ({ hechos: b.hechos, total: b.total, completa: b.completa }))(bienv(p)), estatus: 'activo', tiene_pin: !!p.pin, bloqueado: false, push: dispositivos.has(p.no_empleado), horario: p.entrada ? { entrada: p.entrada, dias: p.dias, comida: 60 } : null, celular_checador: true, fecha_ingreso: p.ingreso || '' }));
     case 'guardarPersona': ADMIN(); { const x = personal.find(p => p.no_empleado === d.persona.no_empleado); if (x) Object.assign(x, d.persona, { salario_diario: Number(d.persona.salario_diario || 0) }); else personal.push({ ...d.persona, entrada: '', dias: '' }); return true; }
     case 'resetPin': ADMIN(); personal.find(p => p.no_empleado === d.no_empleado).pin = ''; return true;
     case 'subirDocumento': ADMIN(); return { id: 'x' };
