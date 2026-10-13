@@ -287,7 +287,7 @@ t('bienvenida: pasos automáticos, docs, apps de repartidor y accesos', () => {
   assert.strictEqual(b.rol, 'repartidor');
   assert.deepStrictEqual(b.pasos.map(x => x.id), ['acceso', 'documentos', 'apps', 'checador', 'notificaciones']);
   assert.deepStrictEqual(b.pasos.map(x => x.hecho), [true, false, false, false, true]); // ya registró push antes
-  b = ok(call('marcarDocs', {}, tok4));
+  b = ok(call('docsRecibidos', { no_empleado: '4', recibidos: true }, admin));
   assert(b.pasos[1].hecho);
   const apps = ok(call('apps', {}, tok4));
   assert(apps.find(a => a.app_id === 'packatelas' && a.tipo === 'apk'));
@@ -318,7 +318,58 @@ t('bienvenida: pasos automáticos, docs, apps de repartidor y accesos', () => {
   ok(call('guardarApp', { app: { app_id: 'Shipday', nombre: 'Shipday Drive', tipo: 'playstore', url_instalar: 'https://play.google.com/x', puestos: 'todos', requerida: true, acceso_directo: true, orden: 5 } }, admin));
   assert.strictEqual(ok(call('apps', {}, t92))[0].app_id, 'shipday');
   assert(ok(call('panel', {}, admin)).bienvenida_pendiente >= 1);
-  assert(/forms\.gle/.test(ok(call('configPublica', {})).form_documentos));
+});
+
+t('alta pública con documentos, revisión y aprobación', () => {
+  const img = Buffer.from('foto').toString('base64');
+  fail(call('altaIniciar', { nombre: 'Juan', rfc: 'PEJJ900101AB1', telefono: '5512345678', rol: 'repartidor' }), /nombre completo/);
+  fail(call('altaIniciar', { nombre: 'Juan Pérez', rfc: 'LOAS950505H12', telefono: '5512345678', rol: 'repartidor' }), /Ya estás dado de alta/);
+  const r = ok(call('altaIniciar', { nombre: 'Juan Pérez', rfc: 'pejj900101ab1', telefono: '55 1234 5678', rol: 'repartidor' }));
+  assert(r.alta_token && r.alta.docs.documentos.some(d => d.doc_id === 'licencia'));
+  const tok = r.alta_token;
+  fail(call('altaSubir', { alta_token: tok, doc_id: 'curp', base64: img, mime: 'text/plain' }), /fotos o PDF/);
+  fail(call('altaSubir', { alta_token: 'xxx', doc_id: 'curp', base64: img, mime: 'image/jpeg' }), /no encontrado/);
+  let e;
+  for (const d of r.alta.docs.documentos) e = ok(call('altaSubir', { alta_token: tok, doc_id: d.doc_id, base64: img, mime: 'image/jpeg' }));
+  assert.strictEqual(e.estatus, 'completa');
+  assert(mails.some(m => /Alta lista/.test(m.s)));
+  // reemplazar un documento deja solo el último
+  e = ok(call('altaSubir', { alta_token: tok, doc_id: 'curp', base64: img, mime: 'application/pdf' }));
+  assert.strictEqual(e.docs.documentos.find(d => d.doc_id === 'curp').mime, 'application/pdf');
+  // retomar desde otro celular con el mismo teléfono
+  fail(call('altaIniciar', { nombre: 'Juan Pérez', rfc: 'PEJJ900101AB1', telefono: '5500000000', rol: 'repartidor' }), /otro celular/);
+  const r2 = ok(call('altaIniciar', { nombre: 'Juan Pérez', rfc: 'PEJJ900101AB1', telefono: '5512345678', rol: 'repartidor' }));
+  fail(call('altaEstado', { alta_token: tok }), /no encontrado/);
+  // patrón
+  const altas = ok(call('altasAdmin', {}, admin));
+  assert.strictEqual(altas[0].nombre, 'Juan Pérez');
+  const arch = altas[0].docs.documentos[0];
+  ok(call('revisarDocumento', { archivo_id: arch.archivo_id, estatus: 'aprobado' }, admin));
+  assert(ok(call('archivo', { archivo_id: arch.archivo_id }, admin)).base64);
+  fail(call('resolverAlta', { alta_id: altas[0].alta_id, aprobar: true, no_empleado: '4' }, admin), /ya es de/);
+  ok(call('resolverAlta', { alta_id: altas[0].alta_id, aprobar: true, no_empleado: '120', puesto: 'Repartidor' }, admin));
+  const est = ok(call('altaEstado', { alta_token: r2.alta_token }));
+  assert.strictEqual(est.estatus, 'aprobada'); assert.strictEqual(est.no_empleado, '120');
+  // entra con su RFC y número, y sus documentos ya están en su expediente
+  const t120 = ok(call('primerAcceso', { rfc: 'PEJJ900101AB1', no_empleado: '120', pin: '159357' })).token;
+  const md = ok(call('misDocumentos', {}, t120));
+  assert(md.completos && md.aprobados === 1);
+  const b = ok(call('bienvenida', {}, t120));
+  assert(b.pasos.find(x => x.id === 'documentos').hecho);
+  assert.strictEqual(ok(call('inicio', {}, t120)).repartidor, true);
+  // rechazo de un documento: notificación y el paso vuelve a pendiente
+  const doc = md.documentos.find(d => d.doc_id === 'domicilio');
+  fail(call('revisarDocumento', { archivo_id: doc.archivo_id, estatus: 'rechazado' }, admin), /qué debe corregir/);
+  ok(call('revisarDocumento', { archivo_id: doc.archivo_id, estatus: 'rechazado', comentario: 'Tiene más de 3 meses' }, admin));
+  assert(/Corrige/.test(ok(call('bandeja', {}, t120))[0].titulo));
+  assert(!ok(call('bienvenida', {}, t120)).pasos.find(x => x.id === 'documentos').hecho);
+  ok(call('subirMiDocumento', { doc_id: 'domicilio', base64: img, mime: 'image/jpeg' }, t120));
+  assert(ok(call('bienvenida', {}, t120)).pasos.find(x => x.id === 'documentos').hecho);
+  fail(call('archivo', { archivo_id: doc.archivo_id }, tok4), /no encontrado/);
+  // oficina: sin licencia
+  const tipos92 = ok(call('misDocumentos', {}, ok(call('login', { rfc: 'OEJO010101H11', pin: '246813' })).token));
+  assert(!tipos92.documentos.some(d => d.doc_id === 'licencia'));
+  assert(ok(call('panel', {}, admin)).docs_por_revisar >= 1);
 });
 
 console.log(`\n${passed} pruebas OK`);

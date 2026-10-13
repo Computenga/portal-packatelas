@@ -40,9 +40,28 @@ const SCHEMA = {
   Dispositivos: ['no_empleado', 'fcm_token', 'plataforma', 'fecha_registro', 'activo'],
   Bitacora: ['fecha', 'no_empleado', 'accion', 'entidad', 'ref', 'detalle'],
   ConfigPortal: ['clave', 'valor', 'descripcion'],
+  DocsTipos: ['doc_id', 'nombre', 'descripcion', 'puestos', 'requerido', 'orden', 'activo'],
+  DocsEmpleado: ['archivo_id', 'owner', 'doc_id', 'nombre_archivo', 'file_id', 'mime', 'fecha', 'estatus', 'comentario',
+    'revisado_por', 'fecha_revision'],
+  Altas: ['alta_id', 'fecha', 'nombre', 'rfc', 'curp', 'telefono', 'correo', 'rol', 'estatus', 'folder_id', 'token_hash',
+    'no_empleado', 'notas', 'fecha_resolucion', 'resuelta_por'],
   Apps: ['app_id', 'nombre', 'descripcion', 'icono', 'color', 'tipo', 'url_instalar', 'android_package', 'url_abrir',
     'puestos', 'requerida', 'acceso_directo', 'orden', 'activo'],
 };
+
+/** Documentos que se piden al entrar (se editan en la pestaña DocsTipos). puestos: todos | repartidor */
+const DOCS_DEFAULT = [
+  ['ine_frente', 'INE (frente)', 'Foto clara, sin reflejos', 'todos', 'SI'],
+  ['ine_reverso', 'INE (reverso)', '', 'todos', 'SI'],
+  ['curp', 'CURP', 'Descárgala de gob.mx/curp', 'todos', 'SI'],
+  ['domicilio', 'Comprobante de domicilio', 'Luz, agua o teléfono, máximo 3 meses', 'todos', 'SI'],
+  ['csf', 'Constancia de situación fiscal (RFC)', 'Del SAT, con tu RFC', 'todos', 'SI'],
+  ['nss', 'Número de Seguro Social', 'Hoja o captura del IMSS con tu NSS', 'todos', 'SI'],
+  ['clabe', 'Estado de cuenta con CLABE', 'Carátula donde se vea tu nombre y CLABE (para tu nómina)', 'todos', 'SI'],
+  ['foto', 'Foto tuya de frente', 'Fondo claro, sin lentes ni gorra', 'todos', 'SI'],
+  ['licencia', 'Licencia de conducir vigente', 'Frente y reverso (puedes subir PDF o dos fotos en una)', 'repartidor', 'SI'],
+];
+const MAX_ARCHIVO = 12e6; // bytes en base64 (~9 MB de archivo)
 
 /** Apps iniciales (se editan después en la pestaña Apps). tipo: playstore | apk | web. puestos: todos | repartidor */
 const APPS_DEFAULT = [
@@ -70,7 +89,7 @@ const CONFIG_DEFAULTS = [
   ['EVIDENCIAS_FOLDER_ID', '', 'Carpeta de Drive para justificantes y evidencias (se crea sola)'],
   ['EXPEDIENTES_FOLDER_ID', '', 'Carpeta de Drive con una subcarpeta por empleado (se crea sola)'],
   ['FONDEADORA_REMITENTE', 'info@negocios.fondeadora.com', 'Remitente de los correos de Fondeadora'],
-  ['FORM_DOCUMENTOS', 'https://forms.gle/qADGZZbjLRHhwjBo7', 'Formulario de documentos de alta (paso 2 de la bienvenida)'],
+  ['ALTAS_FOLDER_ID', '', 'Carpeta de Drive con los documentos de personas que aún no se dan de alta (se crea sola)'],
 ];
 
 // ───────────────────────── Entrada HTTP ─────────────────────────
@@ -124,9 +143,13 @@ const ACTIONS = {
   bienvenida:       { fn: (req, u) => bienvenida_(u.no_empleado) },
   elegirRol:        { fn: elegirRol_ },
   marcarApp:        { fn: marcarApp_ },
-  marcarDocs:       { fn: (req, u) => marcarDocs_(u.no_empleado, req.enviado !== false, u) },
   apps:             { fn: (req, u) => appsPara_(u.no_empleado) },
-  configPublica:    { public: true, fn: () => ({ form_documentos: config_('FORM_DOCUMENTOS', '') }) },
+  altaIniciar:      { public: true, fn: altaIniciar_ },
+  altaEstado:       { public: true, fn: (req) => altaEstado_(altaPorToken_(req.alta_token)) },
+  altaSubir:        { public: true, fn: altaSubir_ },
+  misDocumentos:    { fn: (req, u) => docsDe_('E:' + u.no_empleado, rolBienvenida_(persona_(u.no_empleado))) },
+  subirMiDocumento: { fn: subirMiDocumento_ },
+  archivo:          { fn: archivo_ },
   cambiarPin:       { fn: cambiarPin_ },
 
   // Patrón
@@ -156,6 +179,10 @@ const ACTIONS = {
   recordarBienvenida:{ admin: true, fn: recordarBienvenida_ },
   appsAdmin:        { admin: true, fn: () => rows_('Apps').map(pickApp_).sort((a, b) => a.orden - b.orden) },
   guardarApp:       { admin: true, fn: guardarApp_ },
+  altasAdmin:       { admin: true, fn: altasAdmin_ },
+  resolverAlta:     { admin: true, fn: resolverAlta_ },
+  revisarDocumento: { admin: true, fn: revisarDocumento_ },
+  docsDeEmpleado:   { admin: true, fn: (req) => docsDe_('E:' + req.no_empleado, rolBienvenida_(persona_(req.no_empleado))) },
 };
 
 // ───────────────────────── Instalación ─────────────────────────
@@ -169,6 +196,8 @@ function setup() {
   if (!config_('RECIBOS_FOLDER_ID')) setConfig_('RECIBOS_FOLDER_ID', subfolder_(root, 'Recibos').getId());
   if (!config_('EVIDENCIAS_FOLDER_ID')) setConfig_('EVIDENCIAS_FOLDER_ID', subfolder_(root, 'Evidencias').getId());
   if (!config_('EXPEDIENTES_FOLDER_ID')) setConfig_('EXPEDIENTES_FOLDER_ID', subfolder_(root, 'Expedientes').getId());
+  if (!config_('ALTAS_FOLDER_ID')) setConfig_('ALTAS_FOLDER_ID', subfolder_(root, 'Altas').getId());
+  if (!rows_('DocsTipos').length) DOCS_DEFAULT.forEach((d, i) => append_('DocsTipos', { doc_id: d[0], nombre: d[1], descripcion: d[2], puestos: d[3], requerido: d[4], orden: (i + 1) * 10, activo: 'SI' }));
   if (!rows_('Apps').length) APPS_DEFAULT.forEach((a, i) => append_('Apps', appRow_(a, i)));
   const r = sincronizarPersonal();
   instalarTriggers();
@@ -292,7 +321,8 @@ function sesion_(p) {
 }
 
 function pickUsuario_(p) {
-  return { no_empleado: String(p.no_empleado), nombre: p.nombre, rol: p.rol === 'admin' ? 'admin' : 'empleado', puesto: p.puesto || '' };
+  return { no_empleado: String(p.no_empleado), nombre: p.nombre, rol: p.rol === 'admin' ? 'admin' : 'empleado', puesto: p.puesto || '',
+    repartidor: rolBienvenida_(p) === 'repartidor' };
 }
 
 function auth_(token, adminOnly) {
@@ -376,6 +406,7 @@ function inicio_(req, u) {
     saldo_adeudos: ad.saldo_total,
     cargos_pendientes: ad.cargos_pendientes,
     solicitudes_pendientes: solicitudesDe_(u.no_empleado).filter(s => s.estatus === 'pendiente').length,
+    repartidor: rolBienvenida_(persona_(u.no_empleado)) === 'repartidor',
     bienvenida: (b => ({ hechos: b.hechos, total: b.total, completa: b.completa, siguiente: b.siguiente })) (bienvenida_(u.no_empleado)),
     accesos: appsPara_(u.no_empleado).filter(a => a.acceso_directo),
   };
@@ -1200,7 +1231,9 @@ function documentosDe_(no) {
   if (!p.carpeta_docs) return [];
   const out = [];
   const it = carpetaEmpleado_(p).getFiles();
-  while (it.hasNext()) { const f = it.next(); out.push({ id: f.getId(), nombre: f.getName(), mime: f.getMimeType(), fecha: fmt_(f.getLastUpdated(), 'yyyy-MM-dd'), tamano: f.getSize() }); }
+  const subidos = {};
+  rows_('DocsEmpleado').forEach(d => { subidos[d.file_id] = 1; });
+  while (it.hasNext()) { const f = it.next(); if (subidos[f.getId()]) continue; out.push({ id: f.getId(), nombre: f.getName(), mime: f.getMimeType(), fecha: fmt_(f.getLastUpdated(), 'yyyy-MM-dd'), tamano: f.getSize() }); }
   return out.sort((a, b) => a.nombre.localeCompare(b.nombre));
 }
 
@@ -1264,8 +1297,8 @@ function bienvenida_(no) {
   const apps = rol === 'repartidor' ? appsPara_(no).filter(a => a.requerida) : [];
   const pasos = [
     { id: 'acceso', titulo: 'Crea tu acceso', detalle: 'RFC y PIN', hecho: !!p.pin_hash, auto: true },
-    { id: 'documentos', titulo: 'Sube tus documentos', detalle: 'Formulario de alta', hecho: !!p.onb_docs,
-      fecha: fmt_(p.onb_docs, 'yyyy-MM-dd') },
+    (d => ({ id: 'documentos', titulo: 'Sube tus documentos', detalle: d.subidos + ' de ' + d.requeridos + ' subidos' + (d.rechazados ? ' · ' + d.rechazados + ' por corregir' : ''),
+      hecho: !!p.onb_docs || (d.requeridos > 0 && d.completos), fecha: fmt_(p.onb_docs, 'yyyy-MM-dd'), rechazados: d.rechazados }))(docsDe_('E:' + no, rol)),
   ];
   if (rol === 'repartidor') pasos.push({ id: 'apps', titulo: 'Instala tus apps e inicia sesión', detalle: apps.filter(a => a.lista).length + ' de ' + apps.length + ' listas',
     hecho: apps.length > 0 && apps.every(a => a.lista), listas: apps.filter(a => a.lista).length, total: apps.length,
@@ -1275,7 +1308,7 @@ function bienvenida_(no) {
   const hechos = pasos.filter(x => x.hecho).length;
   const sig = pasos.find(x => !x.hecho);
   return { rol: rol, rol_fijo: !!String(p.puesto || '').trim() || !!p.flotilla_id, pasos: pasos, hechos: hechos, total: pasos.length,
-    completa: hechos === pasos.length, siguiente: sig ? sig.titulo : '', form_documentos: config_('FORM_DOCUMENTOS', '') };
+    completa: hechos === pasos.length, siguiente: sig ? sig.titulo : '' };
 }
 
 function elegirRol_(req, u) {
@@ -1328,6 +1361,182 @@ function guardarApp_(req, u) {
   });
 }
 
+// ───────────────────────── Documentos de alta y altas ─────────────────────────
+
+function tiposDocs_(rol) {
+  return rows_('DocsTipos').filter(t => t.activo !== 'NO' && (t.puestos !== 'repartidor' || rol === 'repartidor' || rol === ''))
+    .sort((a, b) => Number(a.orden || 999) - Number(b.orden || 999))
+    .map(t => ({ doc_id: String(t.doc_id), nombre: t.nombre, descripcion: t.descripcion || '', requerido: t.requerido !== 'NO', solo_repartidor: t.puestos === 'repartidor' }));
+}
+
+/** Lista de documentos de un dueño ('E:no' o 'A:alta_id') con el último archivo de cada tipo. */
+function docsDe_(owner, rol) {
+  const archivos = rows_('DocsEmpleado').filter(d => d.owner === owner && d.estatus !== 'reemplazado');
+  const tipos = tiposDocs_(rol).map(t => {
+    const a = archivos.filter(x => String(x.doc_id) === t.doc_id).sort((x, y) => y._row - x._row)[0];
+    return Object.assign(t, a ? { archivo_id: a.archivo_id, nombre_archivo: a.nombre_archivo, mime: a.mime, fecha: fmt_(a.fecha, 'yyyy-MM-dd HH:mm'),
+      estatus: a.estatus, comentario: a.comentario || '' } : { estatus: 'falta' });
+  });
+  const req = tipos.filter(t => t.requerido);
+  return { documentos: tipos, requeridos: req.length, subidos: req.filter(t => t.estatus === 'subido' || t.estatus === 'aprobado').length,
+    aprobados: req.filter(t => t.estatus === 'aprobado').length, rechazados: tipos.filter(t => t.estatus === 'rechazado').length,
+    completos: req.every(t => t.estatus === 'subido' || t.estatus === 'aprobado') };
+}
+
+function guardarArchivo_(folder, owner, docId, req, etiqueta) {
+  if (!req.base64) throw new Error('Falta el archivo');
+  if (String(req.base64).length > MAX_ARCHIVO) throw new Error('El archivo es muy grande (máx. 9 MB). Toma la foto otra vez o sube un PDF más ligero.');
+  const mime = String(req.mime || '');
+  if (!/^image\/|^application\/pdf$/.test(mime)) throw new Error('Solo se aceptan fotos o PDF');
+  const tipo = rows_('DocsTipos').find(t => String(t.doc_id) === String(docId));
+  if (!tipo) throw new Error('Tipo de documento desconocido');
+  const ext = mime === 'application/pdf' ? 'pdf' : mime === 'image/png' ? 'png' : 'jpg';
+  const nombre = tipo.nombre + ' - ' + etiqueta + '.' + ext;
+  const f = folder.createFile(Utilities.newBlob(Utilities.base64Decode(req.base64), mime, nombre));
+  return withLock_(() => {
+    rows_('DocsEmpleado').filter(d => d.owner === owner && String(d.doc_id) === String(docId) && d.estatus !== 'reemplazado')
+      .forEach(d => update_('DocsEmpleado', d._row, { estatus: 'reemplazado' }));
+    const id = nextId_('DOC', 6);
+    append_('DocsEmpleado', { archivo_id: id, owner: owner, doc_id: String(docId), nombre_archivo: nombre, file_id: f.getId(), mime: mime,
+      fecha: new Date(), estatus: 'subido', comentario: '' });
+    return id;
+  });
+}
+
+function hashToken_(t) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(t) + ':' + secret_('PIN_PEPPER')).map(b => ('0' + (b & 0xff).toString(16)).slice(-2)).join('');
+}
+
+function altaIniciar_(req) {
+  const rfc = normRfc_(req.rfc);
+  frenoIntentos_('alta_' + rfc);
+  if (!/^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/.test(rfc)) throw new Error('Revisa tu RFC: son 13 caracteres (ej. LOAS950505H12)');
+  const tel = String(req.telefono || '').replace(/\D/g, '');
+  if (tel.length !== 10) throw new Error('El celular debe tener 10 dígitos');
+  const nombre = String(req.nombre || '').trim().replace(/\s+/g, ' ');
+  if (nombre.split(' ').length < 2) throw new Error('Escribe tu nombre completo');
+  if (['repartidor', 'otro'].indexOf(req.rol) < 0) throw new Error('Elige tu puesto');
+  if (rows_('Personal').find(p => normRfc_(p.rfc) === rfc && p.estatus !== 'baja')) throw new Error('Ya estás dado de alta. Regresa y entra con tu RFC.');
+  return withLock_(() => {
+    const token = Utilities.getUuid() + Utilities.getUuid().slice(0, 8);
+    const prev = rows_('Altas').find(a => normRfc_(a.rfc) === rfc && ['pendiente', 'completa'].indexOf(a.estatus) >= 0);
+    if (prev) {
+      // Retomar desde otro celular: debe coincidir el teléfono
+      if (String(prev.telefono).replace(/\D/g, '') !== tel) throw new Error('Ya hay un registro con ese RFC y otro celular. Pide ayuda a RH.');
+      update_('Altas', prev._row, { token_hash: hashToken_(token), nombre: nombre, rol: req.rol });
+      return { alta_token: token, alta: altaEstado_(rows_('Altas').find(a => a.alta_id === prev.alta_id)) };
+    }
+    const id = nextId_('ALTA', 4);
+    const folder = DriveApp.getFolderById(config_('ALTAS_FOLDER_ID')).createFolder(rfc + ' - ' + nombre);
+    append_('Altas', { alta_id: id, fecha: new Date(), nombre: nombre, rfc: rfc, curp: String(req.curp || '').toUpperCase(), telefono: tel,
+      correo: String(req.correo || ''), rol: req.rol, estatus: 'pendiente', folder_id: folder.getId(), token_hash: hashToken_(token) });
+    return { alta_token: token, alta: altaEstado_(rows_('Altas').find(a => a.alta_id === id)) };
+  });
+}
+
+function altaPorToken_(token) {
+  if (!token) throw new Error('Registro no encontrado');
+  const h = hashToken_(token);
+  const a = rows_('Altas').find(x => x.token_hash === h);
+  if (!a) throw new Error('Registro no encontrado. Vuelve a empezar con tu RFC y celular.');
+  return a;
+}
+
+function altaEstado_(a) {
+  const d = docsDe_('A:' + a.alta_id, a.rol);
+  return { alta_id: a.alta_id, nombre: a.nombre, rfc: a.rfc, rol: a.rol, estatus: a.estatus, no_empleado: a.estatus === 'aprobada' ? String(a.no_empleado) : '',
+    notas: a.estatus === 'rechazada' ? a.notas : '', docs: d };
+}
+
+function altaSubir_(req) {
+  const a = altaPorToken_(req.alta_token);
+  if (['pendiente', 'completa'].indexOf(a.estatus) < 0) throw new Error('Tu registro ya fue revisado por RH');
+  guardarArchivo_(DriveApp.getFolderById(a.folder_id), 'A:' + a.alta_id, req.doc_id, req, a.rfc);
+  const est = altaEstado_(rows_('Altas').find(x => x.alta_id === a.alta_id));
+  if (est.docs.completos && a.estatus === 'pendiente') {
+    update_('Altas', a._row, { estatus: 'completa' });
+    est.estatus = 'completa';
+    notificarAdmins_('alta', '🆕 Alta lista para revisar', a.nombre + ' subió todos sus documentos.', a.alta_id, true);
+  }
+  return est;
+}
+
+function subirMiDocumento_(req, u) {
+  const p = persona_(u.no_empleado);
+  guardarArchivo_(carpetaEmpleado_(p), 'E:' + u.no_empleado, req.doc_id, req, p.no_empleado + ' ' + p.nombre);
+  const d = docsDe_('E:' + u.no_empleado, rolBienvenida_(p));
+  if (d.completos && !d.documentos.some(x => x.estatus === 'subido' && x.doc_id !== req.doc_id))
+    notificarAdmins_('documentos', '📄 Documentos para revisar', p.nombre + ' completó sus documentos.', String(u.no_empleado), false);
+  return d;
+}
+
+/** Descarga un archivo: el dueño (empleado) o un admin. */
+function archivo_(req, u) {
+  const a = rows_('DocsEmpleado').find(x => x.archivo_id === req.archivo_id);
+  if (!a || (a.owner !== 'E:' + u.no_empleado && u.rol !== 'admin')) throw new Error('Archivo no encontrado');
+  const f = DriveApp.getFileById(a.file_id);
+  return { nombre: a.nombre_archivo, mime: f.getMimeType(), base64: Utilities.base64Encode(f.getBlob().getBytes()) };
+}
+
+function altasAdmin_(req) {
+  const est = req.estatus || 'abiertas';
+  return rows_('Altas').filter(a => est === 'todas' || (est === 'abiertas' ? ['pendiente', 'completa'].indexOf(a.estatus) >= 0 : a.estatus === est))
+    .map(a => Object.assign(altaEstado_(a), { telefono: a.telefono, curp: a.curp, correo: a.correo, fecha: fmt_(a.fecha, 'yyyy-MM-dd HH:mm'),
+      no_empleado: String(a.no_empleado || ''), notas: a.notas || '' }))
+    .sort((x, y) => (x.estatus === 'completa' ? 0 : 1) - (y.estatus === 'completa' ? 0 : 1) || y.fecha.localeCompare(x.fecha));
+}
+
+/** Aprobar: liga la alta a un número de empleado (existente en Personal o nuevo) y mueve sus documentos al expediente. */
+function resolverAlta_(req, u) {
+  const r = withLock_(() => {
+    const a = rows_('Altas').find(x => x.alta_id === req.alta_id);
+    if (!a) throw new Error('Alta no encontrada');
+    if (['pendiente', 'completa'].indexOf(a.estatus) < 0) throw new Error('Esta alta ya fue resuelta');
+    if (!req.aprobar) {
+      update_('Altas', a._row, { estatus: 'rechazada', notas: req.comentario || '', fecha_resolucion: new Date(), resuelta_por: u.nombre });
+      return { a: a, ok: false };
+    }
+    const no = String(req.no_empleado || '').trim();
+    if (!no) throw new Error('Indica el número de empleado (el mismo del checador)');
+    let p = rows_('Personal').find(x => String(x.no_empleado) === no);
+    if (p && p.rfc && normRfc_(p.rfc) !== normRfc_(a.rfc)) throw new Error('El No. ' + no + ' ya es de ' + p.nombre + ' con otro RFC');
+    const dup = rows_('Personal').find(x => normRfc_(x.rfc) === normRfc_(a.rfc) && String(x.no_empleado) !== no);
+    if (dup) throw new Error('Ese RFC ya es de ' + dup.nombre + ' (No. ' + dup.no_empleado + ')');
+    const datos = { rfc: normRfc_(a.rfc), curp: a.curp || '', telefono: a.telefono, correo: a.correo || '', onb_rol: a.rol };
+    if (req.puesto) datos.puesto = req.puesto;
+    if (!p) {
+      append_('Personal', Object.assign({ no_empleado: no, nombre: a.nombre, rol: 'empleado', estatus: 'activo', fecha_ingreso: new Date(), pin_intentos: 0, pin_bloqueado: 'NO' }, datos));
+    } else {
+      if (!p.fecha_ingreso) datos.fecha_ingreso = new Date();
+      update_('Personal', p._row, datos);
+    }
+    p = rows_('Personal').find(x => String(x.no_empleado) === no);
+    const destino = carpetaEmpleado_(p);
+    rows_('DocsEmpleado').filter(d => d.owner === 'A:' + a.alta_id).forEach(d => {
+      try { DriveApp.getFileById(d.file_id).moveTo(destino); } catch (e) { console.warn('mover', e); }
+      update_('DocsEmpleado', d._row, { owner: 'E:' + no });
+    });
+    try { DriveApp.getFolderById(a.folder_id).setTrashed(true); } catch (e) {}
+    update_('Altas', a._row, { estatus: 'aprobada', no_empleado: no, fecha_resolucion: new Date(), resuelta_por: u.nombre, notas: req.comentario || '' });
+    bitacora_(u.no_empleado, 'aprobar_alta', 'Altas', a.alta_id, no);
+    return { a: a, ok: true, no: no };
+  });
+  return { aprobada: r.ok, no_empleado: r.no || '' };
+}
+
+function revisarDocumento_(req, u) {
+  const d = rows_('DocsEmpleado').find(x => x.archivo_id === req.archivo_id);
+  if (!d) throw new Error('Documento no encontrado');
+  if (['aprobado', 'rechazado'].indexOf(req.estatus) < 0) throw new Error('Estatus inválido');
+  if (req.estatus === 'rechazado' && !String(req.comentario || '').trim()) throw new Error('Escribe qué debe corregir');
+  update_('DocsEmpleado', d._row, { estatus: req.estatus, comentario: req.comentario || '', revisado_por: u.nombre, fecha_revision: new Date() });
+  if (req.estatus === 'rechazado' && /^E:/.test(d.owner)) {
+    const tipo = rows_('DocsTipos').find(t => String(t.doc_id) === String(d.doc_id)) || {};
+    notificar_(d.owner.slice(2), 'documento_rechazado', '📄 Corrige tu ' + (tipo.nombre || 'documento'), req.comentario, d.archivo_id);
+  }
+  return true;
+}
+
 // ───────────────────────── Patrón: panel y personal ─────────────────────────
 
 function panel_() {
@@ -1367,6 +1576,9 @@ function panel_() {
       sin_salario: personal.filter(p => !Number(p.salario_diario)).length, sin_pin: personal.filter(p => !p.pin_hash).length,
       sin_horario: ag.empleados.filter(e => e.sin_horario).length,
     },
+    altas_por_revisar: rows_('Altas').filter(a => a.estatus === 'completa').length,
+    altas_en_proceso: rows_('Altas').filter(a => a.estatus === 'pendiente').length,
+    docs_por_revisar: rows_('DocsEmpleado').filter(d => d.estatus === 'subido' && /^E:/.test(d.owner)).length,
     bienvenida_pendiente: personal.filter(p => !bienvenida_(p.no_empleado).completa).length,
     con_push: unicos_(rows_('Dispositivos').filter(d => d.activo === 'SI').map(d => String(d.no_empleado))).length,
     total_personal: personal.length,
@@ -1385,6 +1597,7 @@ function personalAdmin_() {
       flotilla_id: p.flotilla_id, notas: p.notas, tiene_pin: !!p.pin_hash, bloqueado: p.pin_bloqueado === 'SI',
       ultimo_acceso: fmt_(p.ultimo_acceso, 'yyyy-MM-dd HH:mm'), push: disp.indexOf(String(p.no_empleado)) >= 0,
       en_checador: !!e.no, horario: e.no ? { entrada: e.entrada, dias: e.diasTxt, comida: e.comida } : null, celular_checador: !!e.celular,
+      docs_por_revisar: rows_('DocsEmpleado').filter(d => d.owner === 'E:' + p.no_empleado && d.estatus === 'subido').length,
       bienvenida: p.estatus === 'baja' ? null : (b => ({ hechos: b.hechos, total: b.total, completa: b.completa }))(bienvenida_(p.no_empleado)),
     };
   }).sort((a, b) => (a.estatus === 'baja') - (b.estatus === 'baja') || String(a.nombre).localeCompare(String(b.nombre)));

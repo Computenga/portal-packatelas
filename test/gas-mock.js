@@ -76,6 +76,7 @@ function makeEnv({ now, maestro, flotilla, gmail }) {
     createFolder: (n) => folder(n),
     createFile: (blob) => { const id = 'file' + (++fileSeq); files[id] = blob; return { getId: () => id, getName: () => blob.name }; },
     getFiles: () => ({ hasNext: () => false }),
+    setTrashed() {},
   });
   const blob = (data, mime, name) => ({ data, mime, name, getAs() { return blob(data, 'application/pdf', name); }, setName(n) { this.name = n; return this; }, getBytes: () => Buffer.from(String(data)), getDataAsString: () => String(data) });
 
@@ -102,7 +103,8 @@ function makeEnv({ now, maestro, flotilla, gmail }) {
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] || null, setProperty: (k, v) => { props[k] = v; } }) },
     CacheService: { getScriptCache: () => { const c = {}; return { get: k => c[k] || null, put: (k, v) => { c[k] = v; } }; } },
     LockService: { getScriptLock: () => ({ tryLock: () => true, waitLock() {}, releaseLock() {} }) },
-    DriveApp: { getRootFolder: () => folder('root'), getFolderById: (id) => folder(id), getFileById: (id) => ({ getBlob: () => files[id] || blob('x') }) },
+    DriveApp: { getRootFolder: () => folder('root'), getFolderById: (id) => folder(id),
+      getFileById: (id) => ({ getBlob: () => files[id] || blob('x'), getMimeType: () => (files[id] || {}).mime || 'image/jpeg', moveTo: (f) => { (files[id] || {}).folder = f.name; } }) },
     GmailApp: { search: () => gmail.map(t => ({ getMessages: () => t.map(m => ({ getId: () => m.id, getSubject: () => m.subject, getPlainBody: () => m.body, getDate: () => new RealDate(m.date) })) })) },
     UrlFetchApp: { fetch: (url, o) => { pushes.push(JSON.parse(o.payload).message); return { getResponseCode: () => 200, getContentText: () => '{}' }; } },
     ScriptApp: { getOAuthToken: () => 'tok', getProjectTriggers: () => [], deleteTrigger() {}, newTrigger: () => { const b = { timeBased: () => b, everyMinutes: () => b, everyHours: () => b, create: () => b }; return b; } },

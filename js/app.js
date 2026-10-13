@@ -67,6 +67,7 @@ function pinModal(title, text) {
 // ═════════ Estado y navegación ═════════
 const state = { tab: null, noLeidos: 0 };
 const isAdmin = () => session.user?.rol === 'admin';
+const esRepartidor = () => state.repartidor ?? !!session.user?.repartidor;
 const modoPatron = () => isAdmin() && session.modo === 'patron';
 
 const TABS = {
@@ -152,26 +153,117 @@ function pasoRfc(card) {
       if (r.estado === 'bloqueado') return fill(card, h('h3', {}, 'Acceso bloqueado'), h('p', { class: 'muted' }, 'Tu PIN se bloqueó por intentos fallidos. Pide a RH que lo reinicie.'), h('button', { class: 'btn block', onclick: () => pasoRfc(card) }, 'Regresar'));
       r.estado === 'nuevo' ? pasoNuevo(card, v) : pasoPin(card, v);
     } catch (e) {
-      if (/no está dado de alta/.test(e.message)) return pasoAlta(card, v);
+      if (/no está dado de alta/.test(e.message)) return altaView(v);
       toast(e.message, 'error', 5000);
     }
   };
   rfc.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
   fill(card, h('label', { class: 'label' }, 'RFC'), rfc, h('button', { class: 'btn primary block', onclick: go }, 'Continuar'),
     h('p', { class: 'muted small center' }, '¿Primera vez? Escribe tu RFC y crea tu PIN.'),
-    h('button', { class: 'link center-block', onclick: () => pasoAlta(card, '') }, '¿Eres nuevo y aún no te dan de alta? Empieza aquí'));
+    h('button', { class: 'btn block soy-nuevo', onclick: () => altaView('') }, '🆕 Soy nuevo, aún no tengo alta'));
 }
 
-/** Para quien todavía no está en Personal: primero sus documentos. */
-async function pasoAlta(card, rfc) {
-  let form = FORM_DOCS;
-  try { form = (await api('configPublica')).form_documentos || form; } catch {}
-  fill(card, h('h3', {}, '👋 Bienvenido a Packatelas'),
-    h('p', { class: 'muted' }, rfc ? `Tu RFC ${rfc} aún no está dado de alta. ` : '', 'Tu primer paso es mandar tus documentos. Con ellos RH te da de alta y después entras aquí con tu RFC.'),
-    docsChecklist(null),
-    h('a', { class: 'btn primary block', href: form, target: '_blank', rel: 'noopener' }, '📄 Abrir formulario de documentos ↗'),
-    h('p', { class: 'muted tiny' }, 'El formulario te pide entrar con una cuenta de Google para poder subir archivos.'),
-    h('button', { class: 'btn block', onclick: () => pasoRfc(card) }, 'Ya tengo acceso, entrar'));
+// ═════════ Alta de personal nuevo (sin sesión) ═════════
+const ALTA_KEY = (DEMO ? 'ppd_' : 'pp_') + 'alta';
+const altaToken = { get: () => localStorage.getItem(ALTA_KEY), set: t => localStorage.setItem(ALTA_KEY, t), clear: () => localStorage.removeItem(ALTA_KEY) };
+
+function altaShell(...children) {
+  $app.replaceChildren(h('div', { class: 'login alta' },
+    h('div', { class: 'brand' }, h('div', { class: 'logo-big' }, '📦'), h('h1', {}, 'Bienvenido a Packatelas'), h('p', {}, 'Tu alta como empleado')),
+    ...children,
+    h('button', { class: 'link center-block', onclick: () => login() }, 'Ya tengo acceso, entrar con mi RFC')));
+}
+
+async function altaView(rfcInicial) {
+  const t = altaToken.get();
+  if (t) {
+    altaShell(h('div', { class: 'card' }, loading()));
+    try { return altaEstadoView(await api('altaEstado', { alta_token: t })); }
+    catch (e) { if (!(e instanceof NetworkError)) altaToken.clear(); else return altaShell(errorBox(e, () => altaView(rfcInicial))); }
+  }
+  const f = {
+    nombre: h('input', { class: 'input', placeholder: 'Nombre(s) y apellidos', autocomplete: 'name' }),
+    rfc: h('input', { class: 'input mono', placeholder: 'RFC con homoclave', maxlength: 13, autocapitalize: 'characters', value: rfcInicial || '' }),
+    telefono: h('input', { class: 'input', type: 'tel', inputmode: 'numeric', maxlength: 10, placeholder: '10 dígitos' }),
+  };
+  let rol = '';
+  const roles = h('div', { class: 'grid2' });
+  const drawRoles = () => fill(roles, [['repartidor', '🛵 Repartidor'], ['otro', '🏢 Otro puesto']].map(([k, l]) =>
+    h('button', { class: 'btn block' + (rol === k ? ' primary' : ''), onclick: () => { rol = k; drawRoles(); } }, l)));
+  drawRoles();
+  altaShell(h('div', { class: 'card' },
+    h('p', { class: 'muted', style: 'margin-top:0' }, 'Llena tus datos y sube tus documentos con la cámara de tu celular. RH los revisa y te da tu número de empleado.'),
+    h('label', { class: 'label' }, 'Nombre completo'), f.nombre,
+    h('label', { class: 'label' }, 'RFC'), f.rfc,
+    h('label', { class: 'label' }, 'Celular'), f.telefono,
+    h('label', { class: 'label' }, '¿Cuál es tu puesto?'), roles,
+    h('button', { class: 'btn primary block', onclick: async () => {
+      if (!rol) return toast('Elige tu puesto', 'warn');
+      try {
+        const r = await busy('Guardando…', () => api('altaIniciar', { nombre: f.nombre.value, rfc: f.rfc.value.toUpperCase().replace(/[\s-]/g, ''), telefono: f.telefono.value, rol }));
+        altaToken.set(r.alta_token);
+        altaEstadoView(r.alta);
+      } catch (e) { toast(e.message, 'error', 5000); }
+    } }, 'Continuar'),
+    h('p', { class: 'muted tiny' }, '¿Ya empezaste en otro celular? Pon el mismo RFC y celular y sigues donde te quedaste.')));
+}
+
+function altaEstadoView(a) {
+  const d = a.docs;
+  const head = {
+    pendiente: h('div', { class: 'card' }, h('h3', {}, `Hola, ${primerNombre(a.nombre)} 👋`), h('div', { class: 'bar' }, h('span', { style: `width:${Math.round(d.subidos / Math.max(1, d.requeridos) * 100)}%` })),
+      h('p', { class: 'muted small' }, `${d.subidos} de ${d.requeridos} documentos subidos. Puedes cerrar y regresar cuando quieras.`)),
+    completa: h('div', { class: 'banner info' }, h('strong', {}, '✅ Ya subiste todo. '), 'RH está revisando tus documentos. Regresa más tarde para ver tu número de empleado.'),
+    aprobada: h('div', { class: 'card done-card' }, h('div', { class: 'big-emoji' }, '🎉'), h('h3', {}, '¡Ya estás dado de alta!'),
+      h('p', {}, 'Tu número de empleado es'), h('div', { class: 'no-emp' }, a.no_empleado),
+      h('button', { class: 'btn primary block', onclick: () => { altaToken.clear(); session.lastRfc = a.rfc; login().then(() => pasoNuevo(document.querySelector('.login > .card'), a.rfc, a.no_empleado)); } }, 'Crear mi acceso')),
+    rechazada: h('div', { class: 'banner error' }, h('strong', {}, 'Tu alta no fue aprobada. '), a.notas || 'Comunícate con RH.'),
+  }[a.estatus];
+  altaShell(head,
+    a.estatus !== 'aprobada' && [h('h2', { class: 'section' }, 'Tus documentos'),
+      docsList(d.documentos, { editable: ['pendiente', 'completa'].includes(a.estatus), onUpload: async (doc, file) => {
+        const r = await api('altaSubir', { alta_token: altaToken.get(), doc_id: doc.doc_id, base64: file.base64, mime: file.mime });
+        altaEstadoView(r);
+      } })]);
+}
+
+/** Lista de documentos con estado; sube con cámara/archivo o revisa (patrón). */
+function docsList(docs, { editable, onUpload, admin, onReview, onView } = {}) {
+  const EST = { falta: ['Falta', 'muted', '📄'], subido: [admin ? 'Por revisar' : 'En revisión', 'warn', '🕓'], aprobado: ['Aprobado', 'ok', '✅'], rechazado: ['Corregir', 'err', '⚠️'] };
+  return h('div', { class: 'docs' }, docs.map(d => {
+    const [l, c, i] = EST[d.estatus] || [d.estatus, 'muted', '📄'];
+    return h('div', { class: 'doc-row st-' + d.estatus },
+      h('span', { class: 'doc-i' }, i),
+      h('div', { class: 'grow' }, h('strong', {}, d.nombre, !d.requerido && h('small', { class: 'muted' }, ' · opcional')),
+        d.descripcion && d.estatus === 'falta' && h('small', { class: 'muted block' }, d.descripcion),
+        d.estatus === 'rechazado' && d.comentario && h('small', { class: 'block late' }, d.comentario),
+        h('span', { class: 'badge b-' + c }, l)),
+      h('div', { class: 'app-act' },
+        editable && d.estatus !== 'aprobado' && h('button', { class: 'btn sm' + (d.estatus === 'falta' || d.estatus === 'rechazado' ? ' primary' : ''), onclick: async () => {
+          const f = await pickFile('image/*,application/pdf');
+          if (!f) return;
+          try { const file = await readFile(f); await busy('Subiendo ' + d.nombre + '…', () => onUpload(d, file)); toast('Subido', 'ok'); } catch (e) { toast(e.message, 'error', 5000); }
+        } }, d.estatus === 'falta' ? '📷 Subir' : 'Cambiar'),
+        (admin || (!editable && d.archivo_id)) && d.archivo_id && h('button', { class: 'btn sm', onclick: () => onView ? onView(d) : verArchivo(d) }, 'Ver'),
+        admin && d.archivo_id && d.estatus !== 'aprobado' && h('button', { class: 'chk on', onclick: () => onReview(d, 'aprobado') }, '✓ Aprobar'),
+        admin && d.archivo_id && d.estatus !== 'rechazado' && h('button', { class: 'chk', onclick: () => onReview(d, 'rechazado') }, '✗ Rechazar')));
+  }));
+}
+
+async function verArchivo(d) {
+  try { openBase64(await busy('Abriendo…', () => api('archivo', { archivo_id: d.archivo_id }))); } catch (e) { toast(e.message, 'error'); }
+}
+
+async function revisarDoc(d, estatus, after) {
+  let comentario = '';
+  if (estatus === 'rechazado') {
+    const inp = h('textarea', { class: 'input', rows: 2, placeholder: 'Qué debe corregir (ej. foto borrosa, comprobante viejo)' });
+    const ok = await modal('Rechazar ' + d.nombre, inp, [['Cancelar', false], ['Rechazar', true, 'danger']]);
+    if (!ok) return;
+    comentario = inp.value;
+  }
+  try { await busy('Guardando…', () => api('revisarDocumento', { archivo_id: d.archivo_id, estatus, comentario })); toast(estatus === 'aprobado' ? 'Aprobado' : 'Rechazado, se le avisó', 'ok'); after(); }
+  catch (e) { toast(e.message, 'error'); }
 }
 
 function keypad(onDone, { len = 6, label } = {}) {
@@ -202,8 +294,8 @@ function pasoPin(card, rfc) {
     h('p', { class: 'muted small center' }, '¿Olvidaste tu PIN? Pide a RH que lo reinicie.'));
 }
 
-function pasoNuevo(card, rfc) {
-  const no = h('input', { class: 'input big', inputmode: 'numeric', placeholder: 'Ej. 45' });
+function pasoNuevo(card, rfc, noIni) {
+  const no = h('input', { class: 'input big', inputmode: 'numeric', placeholder: 'Ej. 45', value: noIni || '' });
   fill(card, h('h3', {}, 'Bienvenido 👋'), h('p', { class: 'muted' }, 'Es tu primer acceso. Para confirmar que eres tú, escribe tu número de empleado (el mismo del checador).'),
     h('label', { class: 'label' }, 'Número de empleado'), no,
     h('button', { class: 'btn primary block', onclick: () => {
@@ -261,6 +353,7 @@ VIEWS.inicio = async function inicio() {
   let d, offline;
   try { ({ data: d, offline } = await cached('inicio')); } catch (e) { return fill(body, errorBox(e, inicio)); }
   setBadge(d.no_leidos);
+  state.repartidor = !!d.repartidor;
   const a = d.asistencia, hd = d.hoy_detalle;
   fill(body,
     h('p', { class: 'muted cap' }, hoyLargo()),
@@ -311,17 +404,8 @@ VIEWS.inicio = async function inicio() {
 };
 
 // ═════════ Bienvenida, apps y accesos ═════════
-const FORM_DOCS = 'https://forms.gle/qADGZZbjLRHhwjBo7';
-const DOCS = ['INE por ambos lados', 'CURP', 'Comprobante de domicilio reciente', 'Constancia de situación fiscal (RFC)', 'Número de Seguro Social', 'Foto tuya de frente'];
-const DOCS_REP = ['Licencia de conducir vigente'];
 const isAndroid = () => /android/i.test(navigator.userAgent);
 const absUrl = u => new URL(u, location.href).href;
-
-function docsChecklist(rol) {
-  const l = DOCS.concat(rol === 'otro' ? [] : DOCS_REP.map(d => d + (rol ? '' : ' (repartidores)')));
-  return h('div', { class: 'card soft' }, h('p', { class: 'small', style: 'margin-top:0' }, 'Ten a la mano (foto clara o PDF):'),
-    h('ul', { class: 'doclist' }, l.map(d => h('li', {}, d))));
-}
 
 /** Abre la app instalada (Android) o su página de instalación. */
 function abrirApp(a) {
@@ -396,10 +480,9 @@ async function bienvenidaView() {
     } }, l)))));
   const actual = b.pasos.findIndex(x => !x.hecho);
   const accion = x => {
-    if (x.id === 'documentos') return [docsChecklist(b.rol),
-      h('a', { class: 'btn primary', href: b.form_documentos || FORM_DOCS, target: '_blank', rel: 'noopener' }, 'Abrir formulario ↗'), ' ',
-      h('button', { class: 'btn', onclick: async () => { try { await busy('Guardando…', () => api('marcarDocs')); bienvenidaView(); } catch (e) { toast(e.message, 'error'); } } }, 'Ya lo envié'),
-      h('p', { class: 'muted tiny' }, 'El formulario te pide entrar con una cuenta de Google para subir archivos.')];
+    if (x.id === 'documentos') return [x.rechazados ? h('p', { class: 'small late' }, `${x.rechazados} documento(s) por corregir`) : null,
+      h('button', { class: 'btn primary', onclick: () => documentosView(() => bienvenidaView()) }, '📷 Subir mis documentos'),
+      h('p', { class: 'muted tiny' }, 'Con la cámara de tu celular o un PDF. RH los revisa aquí mismo.')];
     if (x.id === 'apps') return [x.faltan && x.faltan.length ? h('p', { class: 'small' }, 'Te faltan: ', x.faltan.join(', ')) : null,
       h('button', { class: 'btn primary', onclick: () => appsView('instalar', () => bienvenidaView()) }, 'Ver apps')];
     if (x.id === 'checador') return [h('ol', { class: 'small steps-ol' }, h('li', {}, 'En la base, pide a RH que te registre en el kiosco del checador.'),
@@ -416,6 +499,7 @@ async function bienvenidaView() {
       h('div', { class: 'step-body' }, h('h3', {}, x.titulo),
         h('p', { class: 'muted' }, x.hecho ? (x.auto ? 'Listo' : x.fecha ? 'Listo · ' + fecha(x.fecha) : 'Listo') : x.detalle),
         !x.hecho && i === actual && accion(x),
+        x.hecho && x.id === 'documentos' && h('button', { class: 'link', onclick: () => documentosView(() => bienvenidaView()) }, 'Ver mis documentos'),
         x.hecho && x.id === 'apps' && h('button', { class: 'link', onclick: () => appsView('instalar', () => bienvenidaView()) }, 'Ver mis apps')))));
 }
 
@@ -611,10 +695,10 @@ VIEWS.mas = async function mas() {
       h('div', {}, h('h3', {}, '🏢 Cambiar a modo patrón'), h('p', { class: 'muted small' }, 'Panel, prenómina, recibos, pagos y personal')), h('span', { class: 'chev' }, '›')),
     menu([
       ['👋', 'Mi bienvenida', 'Pasos para empezar a trabajar', bienvenidaView],
-      ['📱', 'Apps y accesos', 'Instala y abre tus apps de trabajo', () => appsView('instalar')],
+      esRepartidor() && ['📱', 'Apps y accesos', 'Instala y abre tus apps de trabajo', () => appsView('instalar')],
       ['👤', 'Mis datos', 'RFC, CLABE, horario, antigüedad', perfilView],
       ['💳', 'Adeudos y cargos', 'Préstamos, anticipos y cargos de flotilla', adeudosView],
-      ['📄', 'Mis documentos', 'Contrato, constancias y más', documentosView],
+      ['📄', 'Mis documentos', 'Sube tus documentos y ve los de RH', () => documentosView()],
       ['🔔', 'Notificaciones', 'Tu bandeja de avisos', () => bandeja()],
       ['🔑', 'Cambiar PIN', '', cambiarPin],
     ]),
@@ -652,9 +736,10 @@ async function adeudosView() {
   screen('Adeudos y cargos', body, { back: () => go(state.tab === 'inicio' ? 'inicio' : 'mas') });
   try {
     const { data: d } = await cached('adeudos');
+    const verCargos = esRepartidor() || d.cargos.length > 0;
     fill(body,
-      h('div', { class: 'kpis' }, kpi('Saldo de préstamos', money(d.saldo_total), 'se descuenta por quincena', d.saldo_total ? 'warn' : 'ok'),
-        kpi('Cargos flotilla', money(d.cargos_pendientes), 'por descontar', d.cargos_pendientes ? 'warn' : 'ok')),
+      h('div', { class: 'kpis' + (verCargos ? '' : ' one') }, kpi('Saldo de préstamos', money(d.saldo_total), 'se descuenta por quincena', d.saldo_total ? 'warn' : 'ok'),
+        verCargos && kpi('Cargos flotilla', money(d.cargos_pendientes), 'por descontar', d.cargos_pendientes ? 'warn' : 'ok')),
       section('Préstamos y anticipos'),
       d.adeudos.length ? d.adeudos.map(a => h('div', { class: 'card' },
         h('div', { class: 'row between' }, h('h3', {}, a.concepto), h('span', { class: 'badge b-' + (a.estatus === 'activo' ? 'warn' : 'ok') }, a.estatus === 'activo' ? 'Activo' : 'Liquidado')),
@@ -664,23 +749,28 @@ async function adeudosView() {
         d.abonos.filter(x => x.adeudo_id === a.adeudo_id).length > 0 && h('details', {}, h('summary', { class: 'small' }, 'Abonos'),
           d.abonos.filter(x => x.adeudo_id === a.adeudo_id).map(x => h('p', { class: 'small row between' }, h('span', {}, fecha(x.fecha) + ' · ' + x.recibo_id), h('span', { class: 'amount' }, money(x.monto)))))))
         : empty('✅', 'Sin préstamos.'),
-      section('Cargos de flotilla'),
-      d.cargos.length ? d.cargos.map(c => h('div', { class: 'card falla' },
+      verCargos && section('Cargos de flotilla'),
+      !verCargos ? null : d.cargos.length ? d.cargos.map(c => h('div', { class: 'card falla' },
         h('div', { class: 'row between' }, h('h3', {}, `${c.vehiculo_id} · ${money(c.monto)}`), h('span', { class: 'badge b-' + (c.estatus === 'pendiente' ? 'warn' : 'ok') }, c.estatus === 'pendiente' ? 'Por descontar' : 'Descontado')),
         h('p', { class: 'small' }, c.descripcion), h('p', { class: 'muted tiny' }, `${c.rep_id} · ${fecha(c.fecha)}${c.recibo_id ? ' · ' + c.recibo_id : ''}${c.costo_total ? ' · costo total ' + money(c.costo_total) : ''}`)))
         : empty('🛵', 'Sin cargos de la flotilla.'));
   } catch (e) { fill(body, errorBox(e)); }
 }
 
-async function documentosView() {
+async function documentosView(back) {
+  const prev = state.tab;
   const body = h('div', {}, loading());
-  screen('Mis documentos', body, { back: () => go(state.tab || 'mas') });
+  screen('Mis documentos', body, { back: back || (() => go(prev || 'mas')) });
   try {
-    const l = await api('documentos');
-    fill(body, l.length ? h('div', { class: 'menu' }, l.map(d => h('button', { class: 'mi', onclick: async () => {
-      try { openBase64(await busy('Abriendo…', () => api('documento', { id: d.id }))); } catch (e) { toast(e.message, 'error'); }
-    } }, h('span', { class: 'mi-i' }, /pdf/.test(d.mime) ? '📕' : /image/.test(d.mime) ? '🖼️' : '📄'), h('span', { class: 'mi-t' }, h('strong', {}, d.nombre), h('small', { class: 'muted' }, `${fecha(d.fecha)} · ${Math.max(1, Math.round(d.tamano / 1024))} KB`)), h('span', { class: 'chev' }, '⬇︎'))))
-      : empty('📂', 'RH aún no ha subido documentos a tu expediente.'));
+    const [md, rh] = await Promise.all([api('misDocumentos'), api('documentos').catch(() => [])]);
+    const redraw = () => documentosView(back);
+    fill(body,
+      md.rechazados > 0 && h('div', { class: 'banner error' }, `Tienes ${md.rechazados} documento(s) por corregir. Revisa el motivo y súbelo otra vez.`),
+      h('p', { class: 'muted small' }, `${md.subidos} de ${md.requeridos} subidos · ${md.aprobados} aprobados por RH`),
+      docsList(md.documentos, { editable: true, onUpload: async (d, file) => { await api('subirMiDocumento', { doc_id: d.doc_id, base64: file.base64, mime: file.mime }); redraw(); } }),
+      rh.length > 0 && [section('De RH'), h('div', { class: 'menu' }, rh.map(d => h('button', { class: 'mi', onclick: async () => {
+        try { openBase64(await busy('Abriendo…', () => api('documento', { id: d.id }))); } catch (e) { toast(e.message, 'error'); }
+      } }, h('span', { class: 'mi-i' }, /pdf/.test(d.mime) ? '📕' : /image/.test(d.mime) ? '🖼️' : '📄'), h('span', { class: 'mi-t' }, h('strong', {}, d.nombre), h('small', { class: 'muted' }, `${fecha(d.fecha)} · ${Math.max(1, Math.round(d.tamano / 1024))} KB`)), h('span', { class: 'chev' }, '⬇︎'))))]);
   } catch (e) { fill(body, errorBox(e)); }
 }
 
@@ -700,7 +790,7 @@ async function bandeja() {
   screen('Notificaciones', body, { back: () => go(prev) });
   try {
     const l = await api('bandeja');
-    const ICON = { bienvenida: '👋', recibo: '🧾', pago: '💸', solicitud: '📝', aviso: '📢', adeudo: '💳', documento: '📄', alerta: '⚠️' };
+    const ICON = { alta: '🆕', documentos: '📄', documento_rechazado: '⚠️', bienvenida: '👋', recibo: '🧾', pago: '💸', solicitud: '📝', aviso: '📢', adeudo: '💳', documento: '📄', alerta: '⚠️' };
     fill(body,
       l.some(n => !n.leido) && h('div', { class: 'row', style: 'justify-content:flex-end' }, h('button', { class: 'link', onclick: async () => { await api('marcarLeido', { todos: true }); setBadge(0); bandeja(); } }, 'Marcar todo como leído')),
       l.length ? l.map(n => h('button', { class: 'card tap notif' + (n.leido ? '' : ' unread'), onclick: async () => {
@@ -708,7 +798,8 @@ async function bandeja() {
         if (n.tipo === 'recibo' && n.ref) return reciboView(n.ref, () => bandeja());
         if (n.tipo === 'pago') return go('nomina', 'pagos');
         if (n.tipo === 'solicitud') return go(modoPatron() ? 'pmas' : 'solicitudes');
-        if (n.tipo === 'documento') return documentosView();
+        if (n.tipo === 'documento' || n.tipo === 'documento_rechazado') return documentosView(() => bandeja());
+        if (n.tipo === 'alta' && modoPatron()) return altasAdmin();
         if (n.tipo === 'adeudo') return adeudosView();
         if (n.tipo === 'bienvenida' && !modoPatron()) return bienvenidaView();
         n.leido = true; bandeja();
@@ -736,6 +827,8 @@ VIEWS.panel = async function panel() {
   fill(body,
     h('p', { class: 'muted cap' }, hoyLargo()),
     faltan.length > 0 && h('button', { class: 'banner action warn', onclick: () => go('personal', 'incompletos') }, h('strong', {}, 'Completa los expedientes'), h('span', {}, faltan.join(' · ') + ' →')),
+    d.altas_por_revisar > 0 && h('button', { class: 'banner action warn', onclick: () => altasAdmin() }, h('strong', {}, `🆕 ${d.altas_por_revisar} alta(s) lista(s) para revisar`), h('span', {}, (d.altas_en_proceso ? `${d.altas_en_proceso} más subiendo documentos · ` : '') + 'Revisar →')),
+    d.docs_por_revisar > 0 && h('button', { class: 'banner action info', onclick: () => go('personal', 'docs') }, h('strong', {}, `📄 ${d.docs_por_revisar} documento(s) por revisar`), h('span', {}, 'Ver quiénes →')),
     d.bienvenida_pendiente > 0 && h('button', { class: 'banner action info', onclick: () => go('personal', 'bienvenida') }, h('strong', {}, `👋 ${d.bienvenida_pendiente} sin terminar su bienvenida`), h('span', {}, 'Ver quiénes →')),
     d.solicitudes_pendientes > 0 && h('button', { class: 'banner action info', onclick: () => solicitudesAdmin() }, h('strong', {}, `📝 ${d.solicitudes_pendientes} solicitud(es) por resolver`), h('span', {}, 'Revisar →')),
     n.pagos_no_cuadran > 0 && h('button', { class: 'banner action error', onclick: () => go('pnomina', 'pagos') }, h('strong', {}, `⚠️ ${n.pagos_no_cuadran} depósito(s) no cuadran con su recibo`), h('span', {}, 'Revisar →')),
@@ -937,7 +1030,7 @@ VIEWS.personal = async function personal(filtro = 'activos', q = '') {
   const list = h('div');
   const draw = () => {
     const s = search.value.trim().toLowerCase();
-    const r = l.filter(p => (filtro === 'activos' ? p.estatus !== 'baja' : filtro === 'incompletos' ? p.estatus !== 'baja' && incompleto(p) : filtro === 'bienvenida' ? p.bienvenida && !p.bienvenida.completa : filtro === 'bajas' ? p.estatus === 'baja' : true)
+    const r = l.filter(p => (filtro === 'activos' ? p.estatus !== 'baja' : filtro === 'incompletos' ? p.estatus !== 'baja' && incompleto(p) : filtro === 'bienvenida' ? p.bienvenida && !p.bienvenida.completa : filtro === 'docs' ? p.docs_por_revisar > 0 : filtro === 'bajas' ? p.estatus === 'baja' : true)
       && (!s || p.nombre.toLowerCase().includes(s) || p.no_empleado === s));
     fill(list, r.length ? r.map(p => h('button', { class: 'card tap person', onclick: () => personaView(p) },
       h('div', { class: 'avatar sm' + (p.estatus === 'baja' ? ' off' : '') }, iniciales(p.nombre)),
@@ -947,12 +1040,15 @@ VIEWS.personal = async function personal(filtro = 'activos', q = '') {
           !p.salario_diario && h('span', { class: 'badge b-warn' }, 'Sin salario'), !p.horario?.entrada && h('span', { class: 'badge b-warn' }, 'Sin horario'),
           p.bloqueado ? h('span', { class: 'badge b-err' }, 'Bloqueado') : p.tiene_pin ? h('span', { class: 'badge b-ok' }, 'Con acceso') : h('span', { class: 'badge' }, 'Sin acceso'),
           p.bienvenida && h('span', { class: 'badge b-' + (p.bienvenida.completa ? 'ok' : 'warn') }, p.bienvenida.completa ? 'Bienvenida ✓' : `Bienvenida ${p.bienvenida.hechos}/${p.bienvenida.total}`),
+          p.docs_por_revisar > 0 && h('span', { class: 'badge b-warn' }, `📄 ${p.docs_por_revisar} por revisar`),
           p.push && h('span', { class: 'badge b-info' }, '🔔'))),
       h('span', { class: 'chev' }, '›'))) : empty('👥', 'Nadie en este filtro.'));
   };
   search.addEventListener('input', draw);
-  fill(body, h('div', { class: 'chips' }, [['activos', 'Activos'], ['incompletos', `Incompletos (${l.filter(p => p.estatus !== 'baja' && incompleto(p)).length})`], ['bienvenida', `Bienvenida (${l.filter(p => p.bienvenida && !p.bienvenida.completa).length})`], ['bajas', 'Bajas'], ['todos', 'Todos']].map(([k, t]) =>
-    h('button', { class: 'chip ' + (filtro === k ? 'on' : ''), onclick: () => VIEWS.personal(k, search.value) }, t))), search, list,
+  fill(body, h('div', { class: 'chips' }, [['activos', 'Activos'], ['incompletos', `Incompletos (${l.filter(p => p.estatus !== 'baja' && incompleto(p)).length})`], ['bienvenida', `Bienvenida (${l.filter(p => p.bienvenida && !p.bienvenida.completa).length})`], ['docs', `Docs por revisar (${l.filter(p => p.docs_por_revisar).length})`], ['bajas', 'Bajas'], ['todos', 'Todos']].map(([k, t]) =>
+    h('button', { class: 'chip ' + (filtro === k ? 'on' : ''), onclick: () => VIEWS.personal(k, search.value) }, t))),
+    h('button', { class: 'card tap row between', onclick: () => altasAdmin() }, h('div', {}, h('strong', {}, '🆕 Altas de personal nuevo'), h('div', { class: 'muted tiny' }, 'Gente que subió sus documentos y espera su número de empleado')), h('span', { class: 'chev' }, '›')),
+    search, list,
     h('p', { class: 'muted small' }, 'Los empleados nuevos del checador aparecen aquí solos (cada hora). Horario y celular se editan en el kiosco del checador.'));
   draw();
 };
@@ -975,7 +1071,7 @@ async function personaView(p) {
         if (!await confirmar('Reiniciar PIN', `${p.nombre} volverá a crear su PIN con su RFC y número de empleado. Se cierran sus sesiones.`, 'Reiniciar')) return;
         try { await busy('Reiniciando…', () => api('resetPin', { no_empleado: p.no_empleado })); toast('PIN reiniciado', 'ok'); go('personal'); } catch (e) { toast(e.message, 'error'); }
       } }, h('span', {}, '🔑'), 'Reset PIN')),
-    !nuevo && p.estatus !== 'baja' && [section('Bienvenida'), bienvenidaAdminBox(p)],
+    !nuevo && p.estatus !== 'baja' && [section('Bienvenida'), bienvenidaAdminBox(p), section('Documentos'), docsAdminBox(p)],
     section('Identificación'),
     nuevo && inp('no_empleado', 'No. de empleado', { inputmode: 'numeric' }),
     inp('nombre', 'Nombre completo'),
@@ -1016,6 +1112,69 @@ function bienvenidaAdminBox(p) {
   };
   load();
   return box;
+}
+
+function docsAdminBox(p) {
+  const box = h('div', {}, loading());
+  const load = async () => {
+    try {
+      const d = await api('docsDeEmpleado', { no_empleado: p.no_empleado });
+      fill(box, h('p', { class: 'muted small' }, `${d.subidos} de ${d.requeridos} subidos · ${d.aprobados} aprobados`),
+        docsList(d.documentos, { admin: true, onReview: (doc, est) => revisarDoc(doc, est, load) }));
+    } catch (e) { fill(box, errorBox(e)); }
+  };
+  load();
+  return box;
+}
+
+async function altasAdmin(estatus = 'abiertas') {
+  state.tab = 'personal';
+  const body = h('div', {}, loading());
+  screen('Altas', body, { back: () => go('personal') });
+  let l;
+  try { l = await api('altasAdmin', { estatus }); } catch (e) { return fill(body, errorBox(e)); }
+  const EST = { pendiente: ['Subiendo documentos', 'muted'], completa: ['Lista para revisar', 'warn'], aprobada: ['Aprobada', 'ok'], rechazada: ['Rechazada', 'err'] };
+  fill(body,
+    h('div', { class: 'chips' }, [['abiertas', 'Abiertas'], ['aprobada', 'Aprobadas'], ['rechazada', 'Rechazadas'], ['todas', 'Todas']].map(([k, t]) =>
+      h('button', { class: 'chip ' + (estatus === k ? 'on' : ''), onclick: () => altasAdmin(k) }, t))),
+    h('p', { class: 'muted small' }, 'Comparte el portal con la gente nueva: tocan "Soy nuevo", llenan sus datos y suben sus documentos. Aquí los revisas y les das su número de empleado.'),
+    l.length ? l.map(a => {
+      const [lt, lc] = EST[a.estatus] || [a.estatus, 'muted'];
+      return h('div', { class: 'card alta-card' },
+        h('div', { class: 'row between' }, h('div', {}, h('h3', {}, a.nombre), h('span', { class: 'muted tiny mono' }, a.rfc)), h('span', { class: 'badge b-' + lc }, lt)),
+        h('p', { class: 'small' }, `${a.rol === 'repartidor' ? '🛵 Repartidor' : '🏢 Otro puesto'} · 📱 ${a.telefono} · ${fechaHora(a.fecha)}`),
+        a.no_empleado && h('p', { class: 'small' }, 'No. empleado: ', h('strong', {}, a.no_empleado)),
+        a.notas && h('p', { class: 'small muted' }, a.notas),
+        h('details', { open: a.estatus === 'completa' || null }, h('summary', { class: 'small' }, `Documentos (${a.docs.subidos}/${a.docs.requeridos})`),
+          docsList(a.docs.documentos, { admin: true, onReview: (doc, est) => revisarDoc(doc, est, () => altasAdmin(estatus)) })),
+        ['pendiente', 'completa'].includes(a.estatus) && h('div', { class: 'row', style: 'margin-top:10px;gap:8px' },
+          h('button', { class: 'btn sm danger-o', onclick: () => resolverAltaUI(a, false, estatus) }, 'Rechazar'),
+          h('button', { class: 'btn sm primary', onclick: () => resolverAltaUI(a, true, estatus) }, 'Aprobar y asignar número')));
+    }) : empty('🆕', 'No hay altas en este filtro.'));
+}
+
+async function resolverAltaUI(a, aprobar, estatus) {
+  const com = h('textarea', { class: 'input', rows: 2, placeholder: aprobar ? 'Nota (opcional)' : 'Motivo (lo verá la persona)' });
+  let extra = null, no, puesto;
+  if (aprobar) {
+    const per = await busy('Cargando…', () => api('personal'));
+    const libres = per.filter(p => !p.rfc && p.estatus !== 'baja');
+    no = h('input', { class: 'input big', inputmode: 'numeric', placeholder: 'No. empleado' });
+    puesto = h('input', { class: 'input', placeholder: 'Puesto', value: a.rol === 'repartidor' ? 'Repartidor' : '' });
+    const sug = libres.filter(p => p.nombre.toLowerCase().split(' ')[0] === a.nombre.toLowerCase().split(' ')[0]);
+    extra = h('div', {},
+      h('p', { class: 'muted small' }, 'Usa el mismo número que tiene (o tendrá) en el checador. Si ya lo diste de alta en el kiosco, elígelo:'),
+      (sug.length ? sug : libres).slice(0, 8).map(p => h('button', { class: 'chip', style: 'margin:2px', onclick: () => { no.value = p.no_empleado; } }, `${p.no_empleado} · ${primerNombre(p.nombre)}`)),
+      h('label', { class: 'label' }, 'Número de empleado'), no, h('label', { class: 'label' }, 'Puesto'), puesto);
+  }
+  const ok = await modal((aprobar ? 'Aprobar alta · ' : 'Rechazar alta · ') + primerNombre(a.nombre), h('div', { class: 'scroll-sheet' }, extra, com),
+    [['Cancelar', false], [aprobar ? 'Aprobar' : 'Rechazar', true, aprobar ? 'primary' : 'danger']]);
+  if (!ok) return;
+  try {
+    const r = await busy('Guardando…', () => api('resolverAlta', { alta_id: a.alta_id, aprobar, no_empleado: no && no.value, puesto: puesto && puesto.value, comentario: com.value }));
+    toast(aprobar ? `Aprobada · No. ${r.no_empleado}. Ya puede crear su acceso.` : 'Alta rechazada', 'ok', 5000);
+    altasAdmin(estatus);
+  } catch (e) { toast(e.message, 'error', 6000); }
 }
 
 async function appsAdmin() {

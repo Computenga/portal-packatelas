@@ -148,23 +148,47 @@ const APPS = [
 ].map(([app_id, nombre, descripcion, icono, color, tipo, url_instalar, android_package, url_abrir, puestos, requerida, acceso_directo], i) =>
   ({ app_id, nombre, descripcion, icono, color, tipo, url_instalar, android_package, url_abrir, puestos, requerida, acceso_directo, orden: (i + 1) * 10, activo: true }));
 const onb = { '4': { docs: '2026-10-12', apps: ['whatsapp', 'zello', 'waze', 'maps', 'telefono'], celular: true }, '75': { docs: '', apps: [], celular: true }, '5': { docs: '2026-09-01', apps: [], celular: true } };
+const TIPOS = [['ine_frente', 'INE (frente)', 'Foto clara, sin reflejos', 'todos'], ['ine_reverso', 'INE (reverso)', '', 'todos'], ['curp', 'CURP', 'Descárgala de gob.mx/curp', 'todos'],
+  ['domicilio', 'Comprobante de domicilio', 'Luz, agua o teléfono, máximo 3 meses', 'todos'], ['csf', 'Constancia de situación fiscal (RFC)', 'Del SAT, con tu RFC', 'todos'],
+  ['nss', 'Número de Seguro Social', 'Hoja o captura del IMSS con tu NSS', 'todos'], ['clabe', 'Estado de cuenta con CLABE', 'Carátula con tu nombre y CLABE', 'todos'],
+  ['foto', 'Foto tuya de frente', 'Fondo claro, sin lentes ni gorra', 'todos'], ['licencia', 'Licencia de conducir vigente', 'Frente y reverso', 'repartidor']];
+const archivos = [];
+let altas = [];
+function docsDe(owner, rol) {
+  const docs = TIPOS.filter(t => t[3] === 'todos' || rol !== 'otro').map(([doc_id, nombre, descripcion, puestos]) => {
+    const a = archivos.filter(x => x.owner === owner && x.doc_id === doc_id && x.estatus !== 'reemplazado').pop();
+    return { doc_id, nombre, descripcion, requerido: true, solo_repartidor: puestos === 'repartidor', ...(a ? { archivo_id: a.archivo_id, estatus: a.estatus, comentario: a.comentario, fecha: a.fecha, mime: a.mime } : { estatus: 'falta' }) };
+  });
+  const sub = docs.filter(d => ['subido', 'aprobado'].includes(d.estatus)).length;
+  return { documentos: docs, requeridos: docs.length, subidos: sub, aprobados: docs.filter(d => d.estatus === 'aprobado').length, rechazados: docs.filter(d => d.estatus === 'rechazado').length, completos: sub === docs.length };
+}
+function subir(owner, doc_id, mime) { archivos.filter(x => x.owner === owner && x.doc_id === doc_id).forEach(x => x.estatus = 'reemplazado'); archivos.push({ archivo_id: 'DOC-' + (++seq), owner, doc_id, estatus: 'subido', comentario: '', fecha: ahora(), mime }); }
+function altaEstado(a) { return { alta_id: a.alta_id, nombre: a.nombre, rfc: a.rfc, rol: a.rol, estatus: a.estatus, no_empleado: a.no_empleado, notas: a.notas, docs: docsDe('A:' + a.alta_id, a.rol) }; }
 const esRep = p => /repart/i.test(p.puesto || '') || !!p.flotilla_id;
 function appsPara(p) { const o = onb[p.no_empleado] || {}; return APPS.filter(a => a.activo && (a.puestos === 'todos' || (a.puestos === 'repartidor' && esRep(p)))).sort((a, b) => a.orden - b.orden).map(a => ({ ...a, lista: (o.apps || []).includes(a.app_id) })); }
 function bienv(p) {
   const o = onb[p.no_empleado] = onb[p.no_empleado] || { docs: '', apps: [], celular: false };
   const rol = p.puesto ? (esRep(p) ? 'repartidor' : 'otro') : (o.rol || '');
   const req = rol === 'repartidor' ? appsPara(p).filter(a => a.requerida) : [];
+  const dd = docsDe('E:' + p.no_empleado, rol);
   const pasos = [{ id: 'acceso', titulo: 'Crea tu acceso', detalle: 'RFC y PIN', hecho: !!p.pin, auto: true },
-    { id: 'documentos', titulo: 'Sube tus documentos', detalle: 'Formulario de alta', hecho: !!o.docs, fecha: o.docs }];
+    { id: 'documentos', titulo: 'Sube tus documentos', detalle: `${dd.subidos} de ${dd.requeridos} subidos` + (dd.rechazados ? ` · ${dd.rechazados} por corregir` : ''), hecho: dd.completos, rechazados: dd.rechazados }];
   if (rol === 'repartidor') pasos.push({ id: 'apps', titulo: 'Instala tus apps e inicia sesión', detalle: `${req.filter(a => a.lista).length} de ${req.length} listas`, hecho: req.every(a => a.lista), faltan: req.filter(a => !a.lista).map(a => a.nombre) });
   pasos.push({ id: 'checador', titulo: 'Registra tu celular en el checador', detalle: 'QR del kiosco + tu huella', hecho: !!o.celular, auto: true });
   pasos.push({ id: 'notificaciones', titulo: 'Activa las notificaciones', detalle: 'Para tu recibo y tu depósito', hecho: dispositivos.has(p.no_empleado), auto: true });
   const hechos = pasos.filter(x => x.hecho).length;
-  return { rol, pasos, hechos, total: pasos.length, completa: hechos === pasos.length, siguiente: (pasos.find(x => !x.hecho) || {}).titulo || '', form_documentos: 'https://forms.gle/qADGZZbjLRHhwjBo7' };
+  return { rol, pasos, hechos, total: pasos.length, completa: hechos === pasos.length, siguiente: (pasos.find(x => !x.hecho) || {}).titulo || '' };
 }
+['ine_frente', 'ine_reverso', 'curp', 'csf', 'nss', 'clabe', 'foto', 'licencia'].forEach(d => { subir('E:4', d, 'image/jpeg'); archivos[archivos.length - 1].estatus = 'aprobado'; });
+subir('E:4', 'domicilio', 'image/jpeg'); Object.assign(archivos[archivos.length - 1], { estatus: 'rechazado', comentario: 'Tiene más de 3 meses, sube uno reciente' });
+subir('E:75', 'ine_frente', 'image/jpeg'); subir('E:75', 'curp', 'application/pdf');
+altas.push({ alta_id: 'ALTA-0001', nombre: 'Juan Pérez Gómez', rfc: 'PEGJ900101AB1', telefono: '5512345678', rol: 'repartidor', estatus: 'completa', fecha: ahora(), no_empleado: '', notas: '' });
+TIPOS.forEach(t => subir('A:ALTA-0001', t[0], 'image/jpeg'));
+altas.push({ alta_id: 'ALTA-0002', nombre: 'Laura Méndez Ruiz', rfc: 'MERL950505MX2', telefono: '5598765432', rol: 'otro', estatus: 'pendiente', fecha: ahora(), no_empleado: '', notas: '' });
+['ine_frente', 'curp'].forEach(d => subir('A:ALTA-0002', d, 'image/jpeg'));
 const sessions = {};
 function me(token) { const no = sessions[token] || (token && token.startsWith('demo-') ? token.slice(5) : null); const p = personal.find(x => x.no_empleado === no); if (!p) throw new Error('Sesión requerida'); return p; }
-const user = p => ({ no_empleado: p.no_empleado, nombre: p.nombre, rol: p.rol, puesto: p.puesto });
+const user = p => ({ no_empleado: p.no_empleado, nombre: p.nombre, rol: p.rol, puesto: p.puesto, repartidor: esRep(p) });
 const pickR = r => ({ ...r });
 
 export function handle(action, d, token) {
@@ -181,7 +205,7 @@ export function handle(action, d, token) {
         saldo_adeudos: adeudos.filter(x => x.no_empleado === p.no_empleado && x.estatus === 'activo').reduce((s, x) => s + x.saldo, 0),
         cargos_pendientes: p.flotilla_id ? cargos.filter(c => c.responsable_id === p.flotilla_id && !c.cobrado).reduce((s, c) => s + c.monto, 0) : 0,
         solicitudes_pendientes: solicitudes.filter(s => s.no_empleado === p.no_empleado && s.estatus === 'pendiente').length,
-        bienvenida: bienv(p), accesos: appsPara(p).filter(a => a.acceso_directo) };
+        repartidor: esRep(p), bienvenida: bienv(p), accesos: appsPara(p).filter(a => a.acceso_directo) };
     }
     case 'perfil': { const p = me(token); const ing = p.ingreso || ''; const anios = ing ? Math.floor((HOY - new Date(ing)) / 3.156e10) : 0;
       return { ...p, fecha_ingreso: ing, antiguedad: ing ? `${anios} año(s)` : '', clabe: p.clabe ? '•••• ' + p.clabe.slice(-4) : '', banco: p.clabe ? 'BBVA' : '', horario: { entrada: p.entrada, dias: p.dias, comida: p.entrada ? 60 : '' }, celular_checador: true,
@@ -209,9 +233,24 @@ export function handle(action, d, token) {
     case 'bienvenida': return bienv(me(token));
     case 'elegirRol': { const p = me(token); bienv(p); onb[p.no_empleado].rol = d.rol; return bienv(p); }
     case 'marcarApp': { const p = me(token); bienv(p); const o = onb[p.no_empleado]; o.apps = o.apps.filter(x => x !== d.app_id); if (d.lista !== false) o.apps.push(d.app_id); return bienv(p); }
-    case 'marcarDocs': { const p = me(token); bienv(p); onb[p.no_empleado].docs = hoy; return bienv(p); }
     case 'apps': return appsPara(me(token));
-    case 'configPublica': return { form_documentos: 'https://forms.gle/qADGZZbjLRHhwjBo7' };
+    case 'altaIniciar': {
+      if (!d.nombre || d.nombre.trim().split(/\s+/).length < 2) throw new Error('Escribe tu nombre completo');
+      if (!/^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/.test(d.rfc)) throw new Error('Revisa tu RFC: son 13 caracteres (ej. LOAS950505H12)');
+      if (String(d.telefono).replace(/\D/g, '').length !== 10) throw new Error('El celular debe tener 10 dígitos');
+      let a = altas.find(x => x.rfc === d.rfc);
+      if (!a) altas.push(a = { alta_id: 'ALTA-' + (++seq), nombre: d.nombre, rfc: d.rfc, telefono: d.telefono, rol: d.rol, estatus: 'pendiente', fecha: ahora(), no_empleado: '', notas: '' });
+      return { alta_token: 'tok-' + a.alta_id, alta: altaEstado(a) };
+    }
+    case 'altaEstado': { const a = altas.find(x => 'tok-' + x.alta_id === d.alta_token); if (!a) throw new Error('Registro no encontrado'); return altaEstado(a); }
+    case 'altaSubir': { const a = altas.find(x => 'tok-' + x.alta_id === d.alta_token); subir('A:' + a.alta_id, d.doc_id, d.mime); if (docsDe('A:' + a.alta_id, a.rol).completos) a.estatus = 'completa'; return altaEstado(a); }
+    case 'misDocumentos': { const p = me(token); return docsDe('E:' + p.no_empleado, esRep(p) ? 'repartidor' : 'otro'); }
+    case 'subirMiDocumento': { const p = me(token); subir('E:' + p.no_empleado, d.doc_id, d.mime); return docsDe('E:' + p.no_empleado, esRep(p) ? 'repartidor' : 'otro'); }
+    case 'archivo': throw new Error('En la demostración no se descargan archivos.');
+    case 'altasAdmin': ADMIN(); return altas.filter(a => d.estatus === 'todas' || (d.estatus === 'abiertas' || !d.estatus ? ['pendiente', 'completa'].includes(a.estatus) : a.estatus === d.estatus)).map(a => ({ ...altaEstado(a), telefono: a.telefono, fecha: a.fecha }));
+    case 'resolverAlta': { ADMIN(); const a = altas.find(x => x.alta_id === d.alta_id); if (d.aprobar) { if (!d.no_empleado) throw new Error('Indica el número de empleado'); a.estatus = 'aprobada'; a.no_empleado = d.no_empleado; archivos.filter(x => x.owner === 'A:' + a.alta_id).forEach(x => x.owner = 'E:' + d.no_empleado); personal.push({ no_empleado: d.no_empleado, nombre: a.nombre, rfc: a.rfc, puesto: d.puesto, rol: 'empleado', salario_diario: 0, clabe: '', entrada: '', dias: '' }); } else { a.estatus = 'rechazada'; a.notas = d.comentario; } return { aprobada: !!d.aprobar, no_empleado: d.no_empleado }; }
+    case 'revisarDocumento': { ADMIN(); if (d.estatus === 'rechazado' && !d.comentario) throw new Error('Escribe qué debe corregir'); const x = archivos.find(y => y.archivo_id === d.archivo_id); x.estatus = d.estatus; x.comentario = d.comentario || ''; return true; }
+    case 'docsDeEmpleado': { ADMIN(); const p = personal.find(x => x.no_empleado === d.no_empleado); return docsDe('E:' + p.no_empleado, esRep(p) ? 'repartidor' : 'otro'); }
     case 'bienvenidaDe': ADMIN(); return bienv(personal.find(p => p.no_empleado === d.no_empleado));
     case 'docsRecibidos': ADMIN(); { const p = personal.find(x => x.no_empleado === d.no_empleado); bienv(p); onb[p.no_empleado].docs = d.recibidos ? hoy : ''; return bienv(p); }
     case 'recordarBienvenida': ADMIN(); notificar(d.no_empleado, 'bienvenida', '👋 Te falta terminar tu bienvenida', 'Siguiente paso: ' + bienv(personal.find(p => p.no_empleado === d.no_empleado)).siguiente, ''); return true;
@@ -234,7 +273,9 @@ export function handle(action, d, token) {
           sin_pagar: recibos.filter(r => r.estatus === 'emitido').length, pagos_semana: pagos.reduce((s, p) => s + p.monto, 0), pagos_no_cuadran: pagos.filter(p => p.cuadra === 'NO').length },
         solicitudes_pendientes: solicitudes.filter(s => s.estatus === 'pendiente').length,
         datos_faltantes: { sin_rfc: personal.filter(p => !p.rfc).length, sin_clabe: personal.filter(p => !p.clabe).length, sin_salario: personal.filter(p => !p.salario_diario).length, sin_pin: personal.filter(p => !p.pin).length, sin_horario: personal.filter(p => !p.entrada).length },
-        con_push: dispositivos.size, total_personal: personal.length, bienvenida_pendiente: personal.filter(p => !bienv(p).completa).length };
+        con_push: dispositivos.size, total_personal: personal.length, bienvenida_pendiente: personal.filter(p => !bienv(p).completa).length,
+        altas_por_revisar: altas.filter(a => a.estatus === 'completa').length, altas_en_proceso: altas.filter(a => a.estatus === 'pendiente').length,
+        docs_por_revisar: archivos.filter(x => x.owner.startsWith('E:') && x.estatus === 'subido').length };
     }
     case 'asistenciaGeneral': ADMIN(); return { periodo: periodo(d.periodo), hoy, empleados: personal.map(p => { const a = asistencia(p.no_empleado, d.periodo); const x = a.dias.find(y => y.fecha === hoy);
       return { no_empleado: p.no_empleado, nombre: p.nombre, puesto: p.puesto, sin_horario: a.sin_horario, totales: a.totales, hoy: x ? { estado: x.estado, entrada: x.entrada, min_tarde: x.min_tarde, debia: x.debia, laboral: x.laboral } : null }; })
@@ -247,7 +288,7 @@ export function handle(action, d, token) {
     case 'asignarPago': ADMIN(); { const p = pagos.find(x => x.pago_id === d.pago_id); p.recibo_id = d.recibo_id; p.cuadra = d.recibo_id ? 'MANUAL' : 'SIN RECIBO'; return true; }
     case 'pagoManual': ADMIN(); { const p = personal.find(x => x.no_empleado === d.no_empleado); pagos.unshift({ pago_id: 'PAG-' + (++seq), fecha: ahora(), no_empleado: p.no_empleado, nombre: p.nombre, monto: Number(d.monto), concepto: d.concepto, clave_rastreo: 'MANUAL', recibo_id: '', cuadra: 'SIN RECIBO', origen: 'manual' }); return 'ok'; }
     case 'revisarAhora': ADMIN(); return { revisados: 37, pagos_nuevos: 0, transferencias_a_otros: 31 };
-    case 'personal': ADMIN(); return personal.map(p => ({ ...p, bienvenida: (b => ({ hechos: b.hechos, total: b.total, completa: b.completa }))(bienv(p)), estatus: 'activo', tiene_pin: !!p.pin, bloqueado: false, push: dispositivos.has(p.no_empleado), horario: p.entrada ? { entrada: p.entrada, dias: p.dias, comida: 60 } : null, celular_checador: true, fecha_ingreso: p.ingreso || '' }));
+    case 'personal': ADMIN(); return personal.map(p => ({ ...p, docs_por_revisar: archivos.filter(x => x.owner === 'E:' + p.no_empleado && x.estatus === 'subido').length, bienvenida: (b => ({ hechos: b.hechos, total: b.total, completa: b.completa }))(bienv(p)), estatus: 'activo', tiene_pin: !!p.pin, bloqueado: false, push: dispositivos.has(p.no_empleado), horario: p.entrada ? { entrada: p.entrada, dias: p.dias, comida: 60 } : null, celular_checador: true, fecha_ingreso: p.ingreso || '' }));
     case 'guardarPersona': ADMIN(); { const x = personal.find(p => p.no_empleado === d.persona.no_empleado); if (x) Object.assign(x, d.persona, { salario_diario: Number(d.persona.salario_diario || 0) }); else personal.push({ ...d.persona, entrada: '', dias: '' }); return true; }
     case 'resetPin': ADMIN(); personal.find(p => p.no_empleado === d.no_empleado).pin = ''; return true;
     case 'subirDocumento': ADMIN(); return { id: 'x' };

@@ -390,3 +390,19 @@ td .badge { margin: 1px 0; }
 .big-emoji { font-size: 2.6rem; }
 .step .card.soft { margin: 6px 0 10px; }
 .scroll-sheet { max-height: 62vh; overflow-y: auto; }
+
+/* Alta y documentos */
+.soy-nuevo { margin-top: 4px; border-style: dashed; }
+.login.alta { justify-content: flex-start; padding-top: 32px; }
+.login.alta .brand { margin-bottom: 14px; }
+.docs { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.doc-row { display: flex; align-items: center; gap: 10px; background: var(--card); border: 1px solid var(--line); border-left: 5px solid var(--line); border-radius: 14px; padding: 10px 12px; }
+.doc-row.st-subido { border-left-color: var(--warn); }
+.doc-row.st-aprobado { border-left-color: var(--ok); }
+.doc-row.st-rechazado { border-left-color: var(--err); }
+.doc-row .badge { margin-top: 4px; }
+.doc-i { font-size: 1.3rem; width: 26px; text-align: center; flex: none; }
+.no-emp { font-size: 2.6rem; font-weight: 800; letter-spacing: 0.04em; margin: 4px 0 12px; color: var(--navy-2); }
+@media (prefers-color-scheme: dark) { .no-emp { color: var(--accent); } }
+.alta-card details { margin-top: 6px; }
+.alta-card .docs { margin-top: 8px; }

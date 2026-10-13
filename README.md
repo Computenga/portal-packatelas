@@ -43,8 +43,10 @@ Cada vez que cambie `Code.gs`: *Implementar* → *Administrar implementaciones* 
 
 ## Bienvenida, apps y accesos
 
-- **Bienvenida:** reemplaza a la página de onboarding anterior. Pasos: crear acceso, subir documentos (Google Form en `FORM_DOCUMENTOS` de ConfigPortal), instalar apps (solo repartidores), registrar celular en el checador y activar notificaciones. Acceso, checador y notificaciones se marcan solos. Documentos los marca el empleado ("Ya lo envié") o tú desde el expediente.
-- Quien aún no está dado de alta entra con "¿Eres nuevo?" en el login y ve directo el formulario de documentos.
+- **Bienvenida:** pasos: crear acceso, subir documentos, instalar apps (solo repartidores), registrar celular en el checador y activar notificaciones. Todo se marca solo; los documentos cuentan cuando están todos subidos (o si tú marcas "Recibí sus documentos" en el expediente).
+- **Altas sin Google Form:** quien aún no está dado de alta toca "Soy nuevo" en el login, pone nombre, RFC, celular y puesto, y sube cada documento con la cámara (pestaña *Altas*, archivos en Drive → Portal Packatelas/Altas). Tú lo revisas en Personal → Altas: apruebas o rechazas cada documento y le asignas su número de empleado; sus archivos pasan a su expediente y en su celular ve su número y el botón "Crear mi acceso".
+- **Documentos:** la lista sale de la pestaña *DocsTipos* (nombre, para qué puestos, requerido). Los archivos quedan en *DocsEmpleado* con estado subido / aprobado / rechazado. Si rechazas uno, al empleado le llega una notificación con el motivo.
+- **Una sola app para todos:** a quien no es repartidor no le salen apps, accesos directos, cargos de flotilla ni licencia.
 - Repartidor = puesto que dice "repartidor" o que tiene ID de flotilla. Si el puesto está vacío, el empleado lo elige.
 - **Apps:** pestaña *Apps* de la hoja (o Más → Apps y accesos en modo patrón): nombre, ícono, tipo (playstore / apk / web), link para instalar, paquete Android para abrirla, para qué puestos, si es requerida y si sale en Accesos directos.
 - **APK interno:** `apps/packatelas.apk` (paquete `app.packatelas.mx`). Para actualizarlo, reemplaza ese archivo en el repo; el link no cambia.
