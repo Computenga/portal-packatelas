@@ -1,5 +1,5 @@
 // Service worker: caché de la app + notificaciones push de Firebase.
-const VERSION = 'portal-v1.4.0';
+const VERSION = 'portal-v1.4.1';
 const SHELL = ['./', './index.html', './css/app.css', './manifest.webmanifest', './js/app.js', './js/api.js', './js/media.js', './js/config.js',
   './icons/icon-192.png', './icons/icon-512.png'];
 
@@ -21,7 +21,7 @@ self.addEventListener('activate', e => e.waitUntil(caches.keys()
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
-  e.respondWith(fetch(e.request)
+  e.respondWith(fetch(e.request, { cache: 'no-cache' }) // siempre revalida con GitHub Pages: las versiones nuevas se ven al recargar
     .then(res => { const copy = res.clone(); caches.open(VERSION).then(c => c.put(e.request, copy)); return res; })
     .catch(() => caches.match(e.request).then(r => r || caches.match('./index.html'))));
 });
