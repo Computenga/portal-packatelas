@@ -611,7 +611,7 @@ function planDurs(plan,T,svc,cfg){
 }
 function buildSchedule(plan,T,svc,M,stops,cfg){
   const used=plan.routes.map((r,ri)=>({r,ri})).filter(o=>o.r.length);
-  return used.map((o,num)=>{
+  const list=used.map(o=>{
     let t=cfg.start.getTime(),p=0,km=0;const out=[];let geom=[[cfg.depot.lat,cfg.depot.lng]];
     o.r.forEach((x,k)=>{
       const leg=plan.ev&&plan.ev[o.ri]?plan.ev[o.ri][k]:null;
@@ -622,9 +622,15 @@ function buildSchedule(plan,T,svc,M,stops,cfg){
       p=x;
     });
     const end=new Date(t);
-    return{num:num+1,total:used.length,color:color(num),stops:out,start:cfg.start,end,deadline:cfg.end,km,
+    const durMin=(end-cfg.start)/60000;
+    return{total:used.length,stops:out,start:cfg.start,end,deadline:cfg.end,km,durMin,
+      latest:new Date(Math.max(cfg.start.getTime(),cfg.end.getTime()-durMin*60000)),
       parcels:out.reduce((a,s)=>a+s.st.parcels.length,0),slackMin:(cfg.end-end)/60000,geom,traffic:!!(plan.ev&&plan.ev[o.ri])};
   });
+  // Prioridad de despacho: la 1 es la que más tarda (debe salir primero); la última es la más corta (puede salir al final).
+  list.sort((a,b)=>b.durMin-a.durMin||b.parcels-a.parcels||b.km-a.km);
+  list.forEach((r,i)=>{r.num=i+1;r.color=color(i);});
+  return list;
 }
 
 // ===== Proceso principal =====
@@ -763,12 +769,13 @@ function renderResult(){
   </div>
   <div class="hint" style="margin-bottom:8px">Tiempos: ${esc(R.trafficSrc)}</div>
   <div class="btns" style="margin-bottom:10px"><button id="pubBtn" style="background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600">Publicar en la super app</button><button id="printAll">Imprimir tickets (todas)</button><button id="pdfAll">PDF 80 mm (todas)</button><button id="xlsOut">Excel de rutas</button></div>
-  <div class="tblwrap"><table class="tbl"><thead><tr><th>Ruta</th><th>Paradas</th><th>Envíos</th><th>Km</th><th>Salida</th><th>Termina</th><th>Holgura</th><th>Estado</th><th>Repartidor</th><th></th></tr></thead><tbody>`;
+  <div class="hint" style="margin-bottom:6px">Ordenadas por <b>prioridad de despacho</b>: la ruta 1 es la más larga y debe salir primero; la última es la más corta y puede salir al final. *Termina = saliendo a la hora de salida indicada.</div>
+  <div class="tblwrap"><table class="tbl"><thead><tr><th>Prioridad</th><th>Paradas</th><th>Envíos</th><th>Km</th><th>Duración</th><th>Salir a más tardar</th><th>Termina*</th><th>Holgura</th><th>Estado</th><th>Repartidor</th><th></th></tr></thead><tbody>`;
   sched.forEach((s,i)=>{const ok=s.slackMin>=-0.5;
-    h+=`<tr data-i="${i}"><td><span class="dot" style="background:${s.color}"></span>Ruta ${s.num}</td><td>${s.stops.length}</td><td>${s.parcels}</td><td>${s.km.toFixed(1)}</td><td>${hhmm(s.start)}</td><td>${hhmm(s.end)}</td><td>${Math.round(s.slackMin)} min</td><td class="${ok?'st-ok':'st-bad'}">${ok?'A tiempo':'Tarde'}</td><td><select class="emp" data-emp="${i}" style="min-width:170px;padding:5px">${empOptions()}</select></td><td style="display:flex;gap:4px"><button data-print="${i}">Imprimir</button><button data-pdf="${i}">PDF</button><button data-wa="${i}" style="background:#25D366;border-color:#25D366;color:#fff">WhatsApp</button><button data-copy="${i}">Copiar</button></td></tr>`;});
+    h+=`<tr data-i="${i}"><td><span class="dot" style="background:${s.color}"></span>Ruta ${s.num}</td><td>${s.stops.length}</td><td>${s.parcels}</td><td>${s.km.toFixed(1)}</td><td>${durTxt(s.durMin)}</td><td><b>${hhmm(s.latest)}</b></td><td>${hhmm(s.end)}</td><td>${Math.round(s.slackMin)} min</td><td class="${ok?'st-ok':'st-bad'}">${ok?'A tiempo':'Tarde'}</td><td><select class="emp" data-emp="${i}" style="min-width:170px;padding:5px">${empOptions()}</select></td><td style="display:flex;gap:4px"><button data-print="${i}">Imprimir</button><button data-pdf="${i}">PDF</button><button data-wa="${i}" style="background:#25D366;border-color:#25D366;color:#fff">WhatsApp</button><button data-copy="${i}">Copiar</button></td></tr>`;});
   h+=`</tbody></table></div>`;
   sched.forEach((s,i)=>{
-    h+=`<details class="route" id="det${i}"><summary><span class="dot" style="background:${s.color}"></span>Ruta ${s.num} · ${s.stops.length} paradas · ${hhmm(s.start)} → ${hhmm(s.end)}</summary><ol>`;
+    h+=`<details class="route" id="det${i}"><summary><span class="dot" style="background:${s.color}"></span>Ruta ${s.num} · ${s.stops.length} paradas · ${durTxt(s.durMin)} · salir a más tardar ${hhmm(s.latest)}</summary><ol>`;
     s.stops.forEach(o=>{h+=`<li><b>${hhmm(o.eta)}</b> · ${esc(o.st.parcels.map(p=>p.id).join(', '))}<br><span>${esc(o.st.dir||(o.st.lat.toFixed(5)+', '+o.st.lng.toFixed(5)))} · espera ${Math.round(o.svcMin)} min</span></li>`;});
     h+=`</ol></details>`;
   });
@@ -813,6 +820,7 @@ function highlight(i){
 
 // ===== Exportar =====
 const pdfSafe=s=>String(s??'').normalize('NFC').replace(/[^\x20-\x7E\xA0-\xFF]/g,'');
+const durTxt=m=>{m=Math.round(m);return Math.floor(m/60)+' h '+String(m%60).padStart(2,'0')+' min';};
 function stopInfo(o,i,R){
   const ps=o.st.parcels,u=a=>[...new Set(a.filter(Boolean))];
   const p0=ps[0]||{};
@@ -834,7 +842,8 @@ function drawTicket(doc,R,cfg,draw){
   y+=1.5;
   const d=cfg.start.toLocaleDateString('es-MX',{weekday:'short',day:'2-digit',month:'short',year:'numeric'});
   P(`Repartidor: ${R.repartidor||'____________________'}`,'bold',10.5,0.5);
-  P(`Fecha: ${d}`,'bold',9);P(`Salida: ${hhmm(R.start)} de Lassaga 54`,'bold',9);
+  P(`Prioridad de despacho: ${R.num} de ${R.total}`,'bold',10);
+  P(`Fecha: ${d}`,'bold',9);P(`Salida: ${hhmm(R.start)} de Lassaga 54 · salir a más tardar ${hhmm(R.latest)}`,'bold',9);
   P(`Paradas: ${R.stops.length}  Envíos: ${R.parcels}  ${R.km.toFixed(1)} km`,'bold',9);
   const same=R.stops.filter(o=>o.st.parcels.some(p=>p.tipo==='same_day')).length;if(same)P(`Mismo día: ${same} parada(s)`,'bold',9);
   P(`Termina aprox: ${hhmm(R.end)}  (límite ${hhmm(R.deadline)})`,'bold',11,1);
@@ -870,9 +879,9 @@ function ticketHTML(R,cfg){
   const k=cfg.fs,px=v=>(v*k).toFixed(1)+'pt';
   const d=cfg.start.toLocaleDateString('es-MX',{weekday:'short',day:'2-digit',month:'short',year:'numeric'});
   const same=R.stops.filter(o=>o.st.parcels.some(p=>p.tipo==='same_day')).length;
-  let h=`<section class="t"><div class="c b" style="font-size:${px(16)}">PACKATELAS</div><div class="c b" style="font-size:${px(14)}">RUTA ${R.num} de ${R.total}</div>
+  let h=`<section class="t"><div class="c b" style="font-size:${px(16)}">PACKATELAS</div><div class="c b" style="font-size:${px(14)}">RUTA ${R.num} de ${R.total}</div><div class="c b" style="font-size:${px(9)}">PRIORIDAD DE DESPACHO ${R.num}</div>
   <div class="b" style="font-size:${px(11)};margin-top:4px">Repartidor: ${esc(R.repartidor||'____________________')}</div>
-  <div class="b">Fecha: ${esc(d)}<br>Salida: ${hhmm(R.start)} de Lassaga 54<br>Paradas: ${R.stops.length} · Envíos: ${R.parcels} · ${R.km.toFixed(1)} km${same?`<br>Mismo día: ${same} parada(s)`:''}</div>
+  <div class="b">Fecha: ${esc(d)}<br>Salida: ${hhmm(R.start)} de Lassaga 54<br>Salir a más tardar: ${hhmm(R.latest)} · duración ${durTxt(R.durMin)}<br>Paradas: ${R.stops.length} · Envíos: ${R.parcels} · ${R.km.toFixed(1)} km${same?`<br>Mismo día: ${same} parada(s)`:''}</div>
   <div class="b" style="font-size:${px(12)};margin-top:3px">Termina aprox: ${hhmm(R.end)} <span style="font-size:${px(9)}">(límite ${hhmm(R.deadline)})</span></div><hr class="thick">`;
   R.stops.forEach((o,i)=>{
     const s=stopInfo(o,i,R);
@@ -905,7 +914,7 @@ function printTickets(idxs){
 }
 function routeText(R){
   const e=empleadoDe(R.num);
-  let t=`*PACKATELAS · Ruta ${R.num} de ${R.total}*${e?' · '+e.nombre:''}\n${R.start.toLocaleDateString('es-MX',{weekday:'long',day:'2-digit',month:'short'})}\nSalida ${hhmm(R.start)} desde Lassaga 54 · termina aprox ${hhmm(R.end)}\n${R.stops.length} paradas · ${R.parcels} envíos · ${R.km.toFixed(1)} km\n`;
+  let t=`*PACKATELAS · Ruta ${R.num} de ${R.total}*${e?' · '+e.nombre:''}\n${R.start.toLocaleDateString('es-MX',{weekday:'long',day:'2-digit',month:'short'})}\nPrioridad de despacho ${R.num} de ${R.total} · salir a más tardar ${hhmm(R.latest)}\nSalida ${hhmm(R.start)} desde Lassaga 54 · termina aprox ${hhmm(R.end)}\n${R.stops.length} paradas · ${R.parcels} envíos · ${R.km.toFixed(1)} km\n`;
   R.stops.forEach((o,i)=>{
     const s=stopInfo(o,i,R);
     t+=`\n*${s.n}. ~${s.eta}*${s.same?' · MISMO DÍA':''} · ${s.ids.join(', ')}\n${s.nombres?s.nombres+'\n':''}${s.calle}\n${s.zona?s.zona+'\n':''}${s.comp?'Compromiso: '+s.comp+'\n':''}${mapsURL(o.st)}\n`;
@@ -944,7 +953,7 @@ async function publicar(){
 function exportXLSX(){
   const R=S.result;const sched=currentSched();const rows=[];
   sched.forEach(s=>s.stops.forEach((o,k)=>o.st.parcels.forEach(p=>rows.push({Ruta:s.num,Repartidor:empleadoDe(s.num)?.nombre||'',Orden:k+1,Envio:p.id,Direccion:p.dir,Referencia:p.ref,Latitud:p.lat,Longitud:p.lng,Llegada:hhmm(o.eta),Sale:hhmm(o.leave),Espera_min:Math.round(o.svcMin)}))));
-  const res=sched.map(s=>({Ruta:s.num,Paradas:s.stops.length,Envios:s.parcels,Km:+s.km.toFixed(1),Salida:hhmm(s.start),Termina:hhmm(s.end),Holgura_min:Math.round(s.slackMin)}));
+  const res=sched.map(s=>({Prioridad:s.num,Duracion_min:Math.round(s.durMin),Salir_a_mas_tardar:hhmm(s.latest),Ruta:s.num,Paradas:s.stops.length,Envios:s.parcels,Km:+s.km.toFixed(1),Salida:hhmm(s.start),Termina:hhmm(s.end),Holgura_min:Math.round(s.slackMin)}));
   const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'Paradas');XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(res),'Resumen');
   XLSX.writeFile(wb,`rutas_${R.cfg.date}.xlsx`);
 }
