@@ -112,7 +112,7 @@ function doPost(e) {
   try {
     const action = ACTIONS[req.action];
     if (!action) throw new Error('Acción desconocida: ' + req.action);
-    const user = action.public ? null : auth_(req.token, action.admin);
+    const user = action.public ? null : auth_(req.token, action.admin ? 'patron' : action.ops ? 'admin' : '');
     return json_({ ok: true, data: action.fn(req, user) });
   } catch (err) {
     console.error(req.action, err);
@@ -193,14 +193,15 @@ const ACTIONS = {
   docsDeEmpleado:   { admin: true, fn: (req) => docsDe_('E:' + req.no_empleado, rolBienvenida_(persona_(req.no_empleado))) },
 
   // Rutas
+  yo:               { fn: (req, u) => u },
   miRuta:           { fn: (req, u) => miRuta_(u.no_empleado, req.fecha) },
-  rutasConfig:      { admin: true, fn: rutasConfig_ },
+  rutasConfig:      { ops: true, fn: rutasConfig_ },
   guardarClaves:    { admin: true, fn: guardarClaves_ },
-  tomtomRutas:      { admin: true, fn: tomtomRutas_ },
-  publicarRutas:    { admin: true, fn: publicarRutas_ },
-  rutasAdmin:       { admin: true, fn: (req) => rutasAdmin_(req.fecha || hoy_()) },
-  reporteRutas:     { admin: true, fn: (req) => reporteRutas_(req.fecha || hoy_(), false) },
-  shipdayMuestra:   { admin: true, fn: shipdayMuestra_ },
+  tomtomRutas:      { ops: true, fn: tomtomRutas_ },
+  publicarRutas:    { ops: true, fn: publicarRutas_ },
+  rutasAdmin:       { ops: true, fn: (req) => rutasAdmin_(req.fecha || hoy_()) },
+  reporteRutas:     { ops: true, fn: (req) => reporteRutas_(req.fecha || hoy_(), false) },
+  shipdayMuestra:   { ops: true, fn: shipdayMuestra_ },
 };
 
 // ───────────────────────── Instalación ─────────────────────────
@@ -258,7 +259,7 @@ function sincronizarPersonal() {
     empleadosChecador_().forEach(e => {
       const p = personal.find(x => String(x.no_empleado) === e.no);
       if (!p) {
-        append_('Personal', { no_empleado: e.no, nombre: e.nombre, rol: e.no === '1' ? 'admin' : 'empleado', estatus: 'activo',
+        append_('Personal', { no_empleado: e.no, nombre: e.nombre, rol: e.no === '1' ? 'patron' : 'empleado', estatus: 'activo',
           fecha_ingreso: e.ingreso || '', pin_intentos: 0, pin_bloqueado: 'NO' });
         nuevos++;
       } else if (e.nombre && p.nombre !== e.nombre) {
@@ -316,6 +317,7 @@ function primerAcceso_(req) {
 function login_(req) {
   frenoIntentos_('lg_' + normRfc_(req.rfc));
   return withLock_(() => {
+    asegurarPatron_();
     const p = personaPorRfc_(req.rfc);
     if (!p || !p.pin_hash) { Utilities.sleep(800); throw new Error('RFC o PIN incorrecto'); }
     if (p.pin_bloqueado === 'SI') throw new Error('Tu acceso está bloqueado por intentos fallidos. Pide a RH que reinicie tu PIN.');
@@ -340,12 +342,23 @@ function sesion_(p) {
 }
 
 function pickUsuario_(p) {
-  return { no_empleado: String(p.no_empleado), nombre: p.nombre, rol: p.rol === 'admin' ? 'admin' : 'empleado', puesto: p.puesto || '',
+  return { no_empleado: String(p.no_empleado), nombre: p.nombre, rol: rolDe_(p), puesto: p.puesto || '',
     repartidor: rolBienvenida_(p) === 'repartidor' };
 }
 
-function auth_(token, adminOnly) {
+/** Roles: patron (super admin, todo), admin (rutas y reporte), empleado. */
+function rolDe_(p) { return p.rol === 'patron' ? 'patron' : p.rol === 'admin' ? 'admin' : 'empleado'; }
+/** Si nadie es patrón (instalaciones anteriores), el No. 1 pasa a patrón. */
+function asegurarPatron_() {
+  const per = rows_('Personal');
+  if (per.some(p => p.rol === 'patron' && p.estatus !== 'baja')) return;
+  const p1 = per.find(p => String(p.no_empleado) === '1');
+  if (p1) { update_('Personal', p1._row, { rol: 'patron' }); bitacora_('1', 'rol_patron', 'Personal', '1', 'migración a patrón'); }
+}
+
+function auth_(token, nivel) {
   if (!token) throw new Error('Sesión requerida');
+  asegurarPatron_();
   const parts = String(token).split('.');
   let payload;
   try { payload = Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[0])).getDataAsString(); } catch (e) { throw new Error('Sesión inválida'); }
@@ -355,7 +368,8 @@ function auth_(token, adminOnly) {
   const p = rows_('Personal').find(x => String(x.no_empleado) === no);
   if (!p || p.estatus === 'baja' || p.pin_bloqueado === 'SI') throw new Error('Usuario inactivo');
   if (String(p.pin_hash).slice(0, 10) !== ph) throw new Error('Sesión expirada');
-  if (adminOnly && p.rol !== 'admin') throw new Error('Sin permiso para esta acción');
+  const rol = rolDe_(p);
+  if ((nivel === 'patron' && rol !== 'patron') || (nivel === 'admin' && rol === 'empleado')) throw new Error('Sin permiso para esta acción');
   return pickUsuario_(p);
 }
 
@@ -778,7 +792,7 @@ function pickRecibo_(r) {
 
 function reciboPropio_(id, u) {
   const r = rows_('Recibos').find(x => x.recibo_id === id);
-  if (!r || (String(r.no_empleado) !== u.no_empleado && u.rol !== 'admin')) throw new Error('Recibo no encontrado');
+  if (!r || (String(r.no_empleado) !== u.no_empleado && u.rol !== 'patron')) throw new Error('Recibo no encontrado');
   return r;
 }
 function reciboDetalle_(id, u) { return pickRecibo_(reciboPropio_(id, u)); }
@@ -1209,7 +1223,7 @@ function notificar_(no, tipo, titulo, mensaje, ref) {
 }
 
 function notificarAdmins_(tipo, titulo, mensaje, ref, correo) {
-  rows_('Personal').filter(p => p.rol === 'admin' && p.estatus !== 'baja').forEach(p => notificar_(String(p.no_empleado), tipo, titulo, mensaje, ref));
+  rows_('Personal').filter(p => p.rol === 'patron' && p.estatus !== 'baja').forEach(p => notificar_(String(p.no_empleado), tipo, titulo, mensaje, ref));
   if (correo) {
     const to = String(config_('CORREOS_ADMIN', '')).split(',').map(s => s.trim()).filter(String).join(',');
     if (to) try { MailApp.sendEmail(to, 'Portal Packatelas · ' + titulo, mensaje); } catch (e) { console.error('mail', e); }
@@ -1258,7 +1272,7 @@ function documentosDe_(no) {
 }
 
 function documento_(req, u) {
-  const no = u.rol === 'admin' && req.no_empleado ? req.no_empleado : u.no_empleado;
+  const no = u.rol === 'patron' && req.no_empleado ? req.no_empleado : u.no_empleado;
   const p = persona_(no);
   const folder = carpetaEmpleado_(p);
   const f = DriveApp.getFileById(req.id);
@@ -1493,7 +1507,7 @@ function subirMiDocumento_(req, u) {
 /** Descarga un archivo: el dueño (empleado) o un admin. */
 function archivo_(req, u) {
   const a = rows_('DocsEmpleado').find(x => x.archivo_id === req.archivo_id);
-  if (!a || (a.owner !== 'E:' + u.no_empleado && u.rol !== 'admin')) throw new Error('Archivo no encontrado');
+  if (!a || (a.owner !== 'E:' + u.no_empleado && u.rol !== 'patron')) throw new Error('Archivo no encontrado');
   const f = DriveApp.getFileById(a.file_id);
   return { nombre: a.nombre_archivo, mime: f.getMimeType(), base64: Utilities.base64Encode(f.getBlob().getBytes()) };
 }
@@ -1634,7 +1648,8 @@ function guardarPersona_(req, u) {
     if (upd.rfc) { upd.rfc = normRfc_(upd.rfc); if (!/^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/.test(upd.rfc)) throw new Error('RFC inválido'); }
     if (upd.curp) upd.curp = String(upd.curp).toUpperCase();
     if (upd.clabe) { upd.clabe = String(upd.clabe).replace(/\D/g, ''); if (!clabeValida_(upd.clabe)) throw new Error('La CLABE no es válida (revisa los 18 dígitos)'); }
-    if (upd.rol && ['admin', 'empleado'].indexOf(upd.rol) < 0) throw new Error('Rol inválido');
+    if (upd.rol && ['patron', 'admin', 'empleado'].indexOf(upd.rol) < 0) throw new Error('Rol inválido');
+    if (upd.rol === 'patron' && u.rol !== 'patron') throw new Error('Solo un patrón puede dar el rol de patrón');
     if (upd.salario_diario !== undefined) upd.salario_diario = num_(upd.salario_diario);
     if (upd.fecha_ingreso) upd.fecha_ingreso = parseFecha_(upd.fecha_ingreso);
     if (upd.fecha_baja) upd.fecha_baja = parseFecha_(upd.fecha_baja);
@@ -1646,7 +1661,7 @@ function guardarPersona_(req, u) {
       if (!String(d.no_empleado || '').trim() || !upd.nombre) throw new Error('Número y nombre son obligatorios');
       append_('Personal', Object.assign({ no_empleado: String(d.no_empleado).trim(), rol: 'empleado', estatus: 'activo', pin_intentos: 0, pin_bloqueado: 'NO' }, upd));
     } else {
-      if (String(p.no_empleado) === u.no_empleado && upd.rol === 'empleado') throw new Error('No puedes quitarte el rol de admin a ti mismo');
+      if (String(p.no_empleado) === u.no_empleado && upd.rol && upd.rol !== 'patron') throw new Error('No puedes quitarte el rol de patrón a ti mismo');
       update_('Personal', p._row, upd);
     }
     bitacora_(u.no_empleado, 'guardar_persona', 'Personal', d.no_empleado, Object.keys(upd).join(','));
@@ -1988,7 +2003,7 @@ function tareaReporteRutas() {
 function enviarReporteRutas_(fecha, rep) {
   const bien = rep.filter(r => r.calificacion === 'Bien').length, mal = rep.filter(r => r.calificacion === 'Mal').length;
   const resumen = rep.length + ' rutas · ' + bien + ' bien · ' + (rep.length - bien - mal) + ' regular · ' + mal + ' mal';
-  rows_('Personal').filter(p => p.rol === 'admin' && p.estatus !== 'baja').forEach(p => notificar_(String(p.no_empleado), 'reporte_rutas', '🗺️ Reporte de rutas ' + fecha, resumen, fecha));
+  rows_('Personal').filter(p => (p.rol === 'patron' || p.rol === 'admin') && p.estatus !== 'baja').forEach(p => notificar_(String(p.no_empleado), 'reporte_rutas', '🗺️ Reporte de rutas ' + fecha, resumen, fecha));
   const to = String(config_('CORREOS_ADMIN', '')).split(',').map(s => s.trim()).filter(String).join(',');
   if (!to) return;
   const color = { Bien: '#16834a', Regular: '#a85d00', Mal: '#c42020' };

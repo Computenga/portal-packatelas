@@ -52,7 +52,7 @@ t('setup crea pestañas y Personal desde el checador', () => {
   run('setup');
   const per = maestro.getSheetByName('Personal');
   assert.strictEqual(per.getLastRow(), 6);
-  assert.strictEqual(maestro.getSheetByName('Personal').data[1][7], 'admin'); // #1 es admin
+  assert.strictEqual(maestro.getSheetByName('Personal').data[1][7], 'patron'); // #1 es patrón
   // Para la prueba contamos asistencia desde el día 1
   const cfg = maestro.getSheetByName('ConfigPortal');
   cfg.data.find(r => r[0] === 'ASISTENCIA_DESDE')[1] = '2026-10-01';
@@ -70,7 +70,7 @@ t('primer acceso: RFC + No. de empleado y crear PIN', () => {
   fail(call('primerAcceso', { rfc: 'GUPC900101AB1', no_empleado: '4', pin: '482915' }), /no coinciden/);
   fail(call('primerAcceso', { rfc: 'GUPC900101AB1', no_empleado: '1', pin: '111111' }), /fácil/);
   const s = ok(call('primerAcceso', { rfc: 'GUPC900101AB1', no_empleado: '1', pin: '482915' }));
-  assert.strictEqual(s.usuario.rol, 'admin');
+  assert.strictEqual(s.usuario.rol, 'patron');
   admin = s.token;
   fail(call('primerAcceso', { rfc: 'GUPC900101AB1', no_empleado: '1', pin: '482915' }), /ya tiene PIN/);
   assert.strictEqual(ok(call('estadoRfc', { rfc: 'GUPC900101AB1' })).estado, 'activo');
@@ -468,6 +468,31 @@ t('rutas: claves en servidor, proxy TomTom, publicar, Mi ruta y reporte Shipday'
   assert.strictEqual(env.mails.length, antes + 1, 'solo una vez al día');
   const muestra = ok(call('shipdayMuestra', { shipment: 'ML-111' }, admin));
   assert(muestra.info.entregado && /ALREADY_DELIVERED/.test(muestra.crudo));
+});
+
+
+t('roles: patrón (super admin) ve todo; admin solo rutas y reporte; migración del No. 1', () => {
+  ok(call('guardarPersona', { persona: { no_empleado: '4', rol: 'admin' } }, admin));
+  const t4 = ok(call('login', { rfc: 'LOAS950505H12', pin: '204060' }));
+  assert.strictEqual(t4.usuario.rol, 'admin');
+  assert.strictEqual(ok(call('yo', {}, t4.token)).rol, 'admin');
+  ok(call('rutasAdmin', { fecha: '2026-10-12' }, t4.token));
+  ok(call('rutasConfig', {}, t4.token));
+  fail(call('panel', {}, t4.token), /Sin permiso/);
+  fail(call('prenomina', { periodo: '2026-10-1' }, t4.token), /Sin permiso/);
+  fail(call('guardarClaves', { tomtom: 'BUENA' }, t4.token), /Sin permiso/);
+  fail(call('guardarPersona', { persona: { no_empleado: '4', rol: 'patron' } }, t4.token), /Sin permiso/);
+  fail(call('guardarPersona', { persona: { no_empleado: '1', rol: 'admin' } }, admin), /quitarte el rol de patrón/);
+  ok(call('panel', {}, admin));
+  // instalación anterior: nadie es patrón y el No. 1 tiene 'admin' → al entrar pasa a patrón
+  const per = maestro.getSheetByName('Personal');
+  const h = per.data[0], ci = h.indexOf('rol');
+  const fila1 = per.data.find((r, i) => i > 0 && String(r[0]) === '1');
+  fila1[ci] = 'admin';
+  const s1 = ok(call('login', { rfc: 'GUPC900101AB1', pin: '482915' }));
+  assert.strictEqual(s1.usuario.rol, 'patron');
+  assert.strictEqual(fila1[ci], 'patron');
+  ok(call('guardarPersona', { persona: { no_empleado: '4', rol: 'empleado' } }, s1.token));
 });
 
 console.log(`\n${passed} pruebas OK`);

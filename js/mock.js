@@ -34,7 +34,7 @@ const REPORTE_DEMO = [
 ];
 
 const personal = [
-  { no_empleado: '1', nombre: 'Cristhian Michel Guevara Padilla', rfc: 'GUPC900101AB1', puesto: 'Director', rol: 'admin', salario_diario: 0, clabe: '', entrada: '', dias: '', pin: '482915' },
+  { no_empleado: '1', nombre: 'Cristhian Michel Guevara Padilla', rfc: 'GUPC900101AB1', puesto: 'Director', rol: 'patron', salario_diario: 0, clabe: '', entrada: '', dias: '', pin: '482915' },
   { no_empleado: '4', nombre: 'Saidd Argenis López', rfc: 'LOAS950505H12', puesto: 'Repartidor', rol: 'empleado', salario_diario: 320, clabe: '012180015237752341', entrada: '9:00', dias: 'L,M,Mi,J,V,S', flotilla_id: 'U-004', ingreso: '2025-03-10', pin: '482915' },
   { no_empleado: '5', nombre: 'Casandra Alicia Ruiz', rfc: 'RUCA990909MX1', puesto: 'Almacén', rol: 'empleado', salario_diario: 300, clabe: '127180017550284489', entrada: '9:00', dias: 'L,M,Mi,J,V,S', ingreso: '2024-08-01', pin: '' },
   { no_empleado: '52', nombre: 'Diego Mendoza', rfc: '', puesto: 'Repartidor', rol: 'empleado', salario_diario: 300, clabe: '', entrada: '10:00', dias: 'L,M,Mi,J,V,S', flotilla_id: 'U-004' },
@@ -209,7 +209,8 @@ const user = p => ({ no_empleado: p.no_empleado, nombre: p.nombre, rol: p.rol, p
 const pickR = r => ({ ...r });
 
 export function handle(action, d, token) {
-  const ADMIN = () => { const p = me(token); if (p.rol !== 'admin') throw new Error('Sin permiso para esta acción'); return p; };
+  const ADMIN = () => { const p = me(token); if (p.rol !== 'patron') throw new Error('Sin permiso para esta acción'); return p; };
+  const OPS = () => { const p = me(token); if (p.rol !== 'patron' && p.rol !== 'admin') throw new Error('Sin permiso para esta acción'); return p; };
   switch (action) {
     case 'estadoRfc': { const p = personal.find(x => x.rfc === d.rfc); if (!p) { if (!d.rfc.startsWith('XAXX') && /^[A-Z]{4}\d{6}/.test(d.rfc)) { personal.find(x => x.no_empleado === '5').rfc = d.rfc; return { estado: 'nuevo' }; } throw new Error('Ese RFC no está dado de alta. Pídele a RH que lo registre.'); } return { estado: p.pin ? 'activo' : 'nuevo' }; }
     case 'primerAcceso': { const p = personal.find(x => x.rfc === d.rfc); if (!p || p.no_empleado !== d.no_empleado) throw new Error('El RFC y el número de empleado no coinciden'); p.pin = d.pin; return { token: 'demo-' + p.no_empleado, usuario: user(p) }; }
@@ -231,7 +232,7 @@ export function handle(action, d, token) {
     case 'asistencia': return asistencia(me(token).no_empleado, d.periodo);
     case 'asistenciaDe': ADMIN(); return asistencia(d.no_empleado, d.periodo);
     case 'recibos': { const p = me(token); return recibos.filter(r => r.no_empleado === p.no_empleado && r.estatus !== 'cancelado').map(pickR); }
-    case 'recibo': { const p = me(token); const r = recibos.find(x => x.recibo_id === d.recibo_id && (x.no_empleado === p.no_empleado || p.rol === 'admin')); if (!r) throw new Error('Recibo no encontrado'); return pickR(r); }
+    case 'recibo': { const p = me(token); const r = recibos.find(x => x.recibo_id === d.recibo_id && (x.no_empleado === p.no_empleado || p.rol === 'patron')); if (!r) throw new Error('Recibo no encontrado'); return pickR(r); }
     case 'reciboPdf': throw new Error('En la demostración no hay PDF; con el backend real se descarga el PDF generado en Drive.');
     case 'firmarRecibo': { const p = me(token); if (d.pin !== p.pin) throw new Error('PIN incorrecto'); const r = recibos.find(x => x.recibo_id === d.recibo_id); r.firma_fecha = ahora(); return pickR(r); }
     case 'pagos': { const p = me(token); return pagos.filter(x => x.no_empleado === p.no_empleado); }
@@ -319,12 +320,12 @@ export function handle(action, d, token) {
     case 'enviarAviso': ADMIN(); { const dest = d.destinatarios === 'todos' ? personal.map(p => p.no_empleado) : d.destinatarios; dest.forEach(no => notificar(no, 'aviso', '📢 ' + d.titulo, d.mensaje, 'AV')); return { enviados: dest.length, con_push: dest.filter(x => dispositivos.has(x)).length }; }
     case 'avisosEnviados': ADMIN(); return [{ ref: 'AV-00001', fecha: periodo(ANT).hasta + ' 09:00', titulo: '📢 Junta el sábado', mensaje: 'Junta general a las 8:30 en la base.', total: 7, leidos: 4 }];
     case 'miRuta': { const p = me(token); return esRep(p) ? { ...RUTA_DEMO, nombre: p.nombre } : null; }
-    case 'rutasConfig': ADMIN(); return { tomtom: false, shipday: true, empleados: personal.map(p => ({ no_empleado: p.no_empleado, nombre: p.nombre, telefono: '5512345678', repartidor: esRep(p) })).sort((a, b) => b.repartidor - a.repartidor) };
+    case 'rutasConfig': OPS(); return { tomtom: false, shipday: true, empleados: personal.map(p => ({ no_empleado: p.no_empleado, nombre: p.nombre, telefono: '5512345678', repartidor: esRep(p) })).sort((a, b) => b.repartidor - a.repartidor) };
     case 'guardarClaves': ADMIN(); throw new Error('En la demostración no se guardan claves.');
-    case 'tomtomRutas': ADMIN(); throw new Error('En la demostración no hay TomTom.');
-    case 'publicarRutas': ADMIN(); return { publicadas: (d.rutas || []).filter(r => r.no_empleado).length, con_push: 1 };
-    case 'rutasAdmin': ADMIN(); return { fecha: d.fecha, shipday: true, rutas: [{ ruta_id: 'RT-000001', fecha: d.fecha, no_empleado: '4', nombre: 'Saidd Argenis López', num: 1, total: 2, salida: '10:00', fin: '13:05', km: 31.4, paradas: 6, envios: 7, estatus: 'activa', visto: d.fecha + ' 09:52' }, { ruta_id: 'RT-000002', fecha: d.fecha, no_empleado: '92', nombre: 'Jonatan Ortega', num: 2, total: 2, salida: '10:00', fin: '13:30', km: 28.2, paradas: 7, envios: 7, estatus: 'activa', visto: '' }], reporte: REPORTE_DEMO };
-    case 'reporteRutas': ADMIN(); return { fecha: d.fecha, rutas: 2, reporte: REPORTE_DEMO };
+    case 'tomtomRutas': OPS(); throw new Error('En la demostración no hay TomTom.');
+    case 'publicarRutas': OPS(); return { publicadas: (d.rutas || []).filter(r => r.no_empleado).length, con_push: 1 };
+    case 'rutasAdmin': OPS(); return { fecha: d.fecha, shipday: true, rutas: [{ ruta_id: 'RT-000001', fecha: d.fecha, no_empleado: '4', nombre: 'Saidd Argenis López', num: 1, total: 2, salida: '10:00', fin: '13:05', km: 31.4, paradas: 6, envios: 7, estatus: 'activa', visto: d.fecha + ' 09:52' }, { ruta_id: 'RT-000002', fecha: d.fecha, no_empleado: '92', nombre: 'Jonatan Ortega', num: 2, total: 2, salida: '10:00', fin: '13:30', km: 28.2, paradas: 7, envios: 7, estatus: 'activa', visto: '' }], reporte: REPORTE_DEMO };
+    case 'reporteRutas': OPS(); return { fecha: d.fecha, rutas: 2, reporte: REPORTE_DEMO };
     default: throw new Error('Acción no simulada: ' + action);
   }
 }

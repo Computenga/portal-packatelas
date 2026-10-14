@@ -66,9 +66,10 @@ function pinModal(title, text) {
 
 // ═════════ Estado y navegación ═════════
 const state = { tab: null, noLeidos: 0 };
-const isAdmin = () => session.user?.rol === 'admin';
+const isPatron = () => session.user?.rol === 'patron';
+const isAdmin = () => isPatron() || session.user?.rol === 'admin';
 const esRepartidor = () => state.repartidor ?? !!session.user?.repartidor;
-const modoPatron = () => isAdmin() && session.modo === 'patron';
+const modoPatron = () => isPatron() && session.modo === 'patron';
 
 const TABS = {
   empleado: [['inicio', '🏠', 'Inicio'], ['asistencia', '⏱️', 'Asistencia'], ['nomina', '💵', 'Nómina'], ['solicitudes', '📝', 'Solicitudes'], ['mas', '☰', 'Más']],
@@ -695,10 +696,11 @@ VIEWS.mas = async function mas() {
   const body = h('div', {},
     h('div', { class: 'card row', style: 'gap:12px' }, h('div', { class: 'avatar' }, iniciales(u.nombre)),
       h('div', {}, h('h3', {}, u.nombre), h('p', { class: 'muted small' }, `No. ${u.no_empleado}${u.puesto ? ' · ' + u.puesto : ''}`))),
-    isAdmin() && h('button', { class: 'card tap row between switch', onclick: () => { session.modo = 'patron'; start(); } },
+    isPatron() && h('button', { class: 'card tap row between switch', onclick: () => { session.modo = 'patron'; start(); } },
       h('div', {}, h('h3', {}, '🏢 Cambiar a modo patrón'), h('p', { class: 'muted small' }, 'Panel, prenómina, recibos, pagos y personal')), h('span', { class: 'chev' }, '›')),
     menu([
       ['👋', 'Mi bienvenida', 'Pasos para empezar a trabajar', bienvenidaView],
+      isAdmin() && !isPatron() && ['🧭', 'Rutas y reporte', 'Ruteador, rutas publicadas y reporte de Shipday', () => rutasAdminView()],
       esRepartidor() && ['🗺️', 'Mi ruta', 'Paradas en orden y mapa', () => rutaView()],
       esRepartidor() && ['📱', 'Apps y accesos', 'Instala y abre tus apps de trabajo', () => appsView('instalar')],
       ['👤', 'Mis datos', 'RFC, CLABE, horario, antigüedad', perfilView],
@@ -1039,7 +1041,7 @@ VIEWS.personal = async function personal(filtro = 'activos', q = '') {
       && (!s || p.nombre.toLowerCase().includes(s) || p.no_empleado === s));
     fill(list, r.length ? r.map(p => h('button', { class: 'card tap person', onclick: () => personaView(p) },
       h('div', { class: 'avatar sm' + (p.estatus === 'baja' ? ' off' : '') }, iniciales(p.nombre)),
-      h('div', { class: 'grow' }, h('strong', {}, p.nombre), h('div', { class: 'muted tiny' }, `No. ${p.no_empleado}${p.puesto ? ' · ' + p.puesto : ''}${p.rol === 'admin' ? ' · admin' : ''}`),
+      h('div', { class: 'grow' }, h('strong', {}, p.nombre), h('div', { class: 'muted tiny' }, `No. ${p.no_empleado}${p.puesto ? ' · ' + p.puesto : ''}${p.rol === 'patron' ? ' · patrón' : p.rol === 'admin' ? ' · admin' : ''}`),
         h('div', { class: 'row wrap gap4', style: 'margin-top:4px' },
           !p.rfc && h('span', { class: 'badge b-warn' }, 'Sin RFC'), !p.clabe && h('span', { class: 'badge b-warn' }, 'Sin CLABE'),
           !p.salario_diario && h('span', { class: 'badge b-warn' }, 'Sin salario'), !p.horario?.entrada && h('span', { class: 'badge b-warn' }, 'Sin horario'),
@@ -1090,7 +1092,7 @@ async function personaView(p) {
     h('p', { class: 'muted tiny' }, 'Con la CLABE se reconocen sus depósitos de Fondeadora automáticamente.'),
     inp('flotilla_id', 'ID en la flotilla (ej. U-004)', { autocapitalize: 'characters' }),
     section('Acceso'),
-    h('div', { class: 'grid2' }, sel('rol', 'Rol', [['empleado', 'Empleado'], ['admin', 'Patrón / admin']]), sel('estatus', 'Estatus', [['activo', 'Activo'], ['baja', 'Baja']])),
+    h('div', { class: 'grid2' }, sel('rol', 'Rol', [['empleado', 'Empleado'], ['admin', 'Admin (rutas y reporte)'], ['patron', 'Patrón (super admin)']]), sel('estatus', 'Estatus', [['activo', 'Activo'], ['baja', 'Baja']])),
     inp('fecha_baja', 'Fecha de baja', { type: 'date' }),
     h('label', { class: 'label' }, 'Notas internas'), (f.notas = h('textarea', { class: 'input', rows: 2 }, p.notas || '')),
     h('button', { class: 'btn primary block', onclick: async () => {
@@ -1433,10 +1435,10 @@ async function rutaView(back) {
 const CAL = { Bien: 'ok', Regular: 'warn', Mal: 'err', 'Sin datos': 'muted' };
 const EST_PARADA = { entregado: ['Entregado', 'ok'], parcial: ['Parcial', 'warn'], fallido: ['Fallido', 'err'], pendiente: ['Sin entregar', 'err'], no_en_shipday: ['No está en Shipday', 'muted'] };
 async function rutasAdminView(f) {
-  state.tab = 'pmas';
+  state.tab = modoPatron() ? 'pmas' : 'mas';
   f = f || isoHoy();
   const body = h('div', {}, loading());
-  screen('Rutas y reporte', body, { back: () => go('pmas') });
+  screen('Rutas y reporte', body, { back: () => go(modoPatron() ? 'pmas' : 'mas') });
   let d;
   try { d = await api('rutasAdmin', { fecha: f }); } catch (e) { return fill(body, errorBox(e, () => rutasAdminView(f))); }
   const rep = {}; (d.reporte || []).forEach(x => rep[x.ruta_id] = x);
@@ -1478,6 +1480,7 @@ async function rutasAdminView(f) {
 // ═════════ Arranque ═════════
 function start() {
   if (!session.token || !session.user) return login();
+  if (!DEMO && !state.yo) { state.yo = true; api('yo').then(u => { if (u && (u.rol !== session.user.rol || u.repartidor !== session.user.repartidor)) { session.set(session.token, u); start(); } }).catch(() => {}); }
   state.tab = modoPatron() ? 'panel' : 'inicio';
   go(state.tab);
   refreshPush((n, data) => {

@@ -83,3 +83,10 @@ node test/ui.test.js carpeta  # recorre la app en modo demo y toma capturas
 - **Mi ruta (repartidor):** tarjeta en Inicio y en Más → Mi ruta: mapa con círculos numerados y la línea del recorrido, y la lista de paradas con botones para navegar con Google Maps o Waze.
 - **Reporte Shipday:** busca cada envío como `ML-<shipment>` (prefijo en *ConfigPortal → SHIPDAY_PREFIJO*) y compara el orden y la hora de entrega contra lo planeado. Se genera solo después de `RUTA_REPORTE_HORA` (23 h, después del límite de entrega) y llega por correo y push a los admins; también se puede generar en Más → Rutas y reporte. Se guarda en *ReporteRutas*. Tolerancia: `RUTA_TOLERANCIA_MIN`. Si las horas de Shipday salen corridas 6 h, cambia `SHIPDAY_HORA_UTC`.
 - Calificación: **Bien** = ≥85 % en orden, ≤10 % tarde y todo entregado; **Regular** = ≥65 % en orden, ≤30 % tarde y casi todo entregado; si no, **Mal**.
+
+## Roles
+
+- **Patrón (super admin)** — rol `patron`: todo el modo patrón (nómina, pagos, personal, avisos…), las claves del servidor y Rutas y reporte. Solo un patrón puede dar el rol de patrón y nadie puede quitárselo a sí mismo.
+- **Admin** — rol `admin`: su portal de empleado más **Rutas y reporte** y el ruteador (publicar rutas, ver y generar el reporte). No ve nómina ni expedientes.
+- **Empleado** — rol `empleado`.
+- Instalaciones anteriores: si nadie tiene `patron`, el No. 1 pasa a patrón automáticamente.

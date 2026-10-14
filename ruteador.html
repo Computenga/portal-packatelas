@@ -965,11 +965,12 @@ function pintarClaves(){
 }
 async function cargarServidor(){
   const u=SES.user;
-  if(!SES.token||!u||u.rol!=='admin'){
-    $('gate').style.display='block';$('gate').innerHTML='Para usar el ruteador entra primero al <a href="./">portal</a> con tu RFC y PIN de patrón; luego regresa a esta página.';
+  if(!SES.token||!u||(u.rol!=='admin'&&u.rol!=='patron')){
+    $('gate').style.display='block';$('gate').innerHTML='Para usar el ruteador entra primero al <a href="./">portal</a> con un usuario admin o patrón; luego regresa a esta página.';
     $('keysState').textContent='Sin sesión del portal.';$('run').disabled=true;return;
   }
-  $('who').textContent='Patrón: '+u.nombre;
+  $('who').textContent=(u.rol==='patron'?'Patrón: ':'Admin: ')+u.nombre;
+  if(u.rol!=='patron')$('keysEdit').style.display='none';
   try{S.srv=await api('rutasConfig');pintarClaves();}
   catch(e){$('gate').style.display='block';$('gate').textContent='No se pudo conectar con el portal: '+e.message;$('keysState').textContent='';}
 }
