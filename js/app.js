@@ -1,4 +1,4 @@
-import { api, cached, session, DEMO, NetworkError } from './api.js';
+import { api, cached, prefetch, session, DEMO, NetworkError } from './api.js';
 import { pickFile, readFile, openBase64, pushState, enablePush, refreshPush, isIOS, isStandalone } from './media.js';
 
 // ═════════ DOM ═════════
@@ -65,7 +65,12 @@ function pinModal(title, text) {
 }
 
 // ═════════ Estado y navegación ═════════
-const state = { tab: null, noLeidos: 0 };
+const state = { tab: null, noLeidos: 0, seq: 0 };
+/** Para cached(): si llega información nueva y la persona sigue en la misma pantalla, la vuelve a pintar sin perder el scroll. */
+function live(rerun) {
+  const seq = state.seq;
+  return { onUpdate: () => { if (state.seq !== seq) return; const y = window.scrollY; Promise.resolve(rerun()).then(() => window.scrollTo(0, y)); } };
+}
 const isPatron = () => session.user?.rol === 'patron';
 const isAdmin = () => isPatron() || session.user?.rol === 'admin';
 const esRepartidor = () => state.repartidor ?? !!session.user?.repartidor;
@@ -79,6 +84,7 @@ const VIEWS = {};
 function go(tab, ...args) { state.tab = tab; (VIEWS[tab] || VIEWS[modoPatron() ? 'panel' : 'inicio'])(...args); }
 
 function screen(title, body, { back, actions, sub } = {}) {
+  state.seq++;
   $app.replaceChildren(
     h('header', { class: 'topbar' + (modoPatron() ? ' patron' : '') },
       back ? h('button', { class: 'icon-btn', 'aria-label': 'Regresar', onclick: back }, '←') : h('span', { class: 'logo' }, modoPatron() ? '🏢' : '📦'),
@@ -352,7 +358,7 @@ VIEWS.inicio = async function inicio() {
   const body = h('div', {}, h('p', { class: 'muted cap' }, hoyLargo()), loading());
   screen('Hola, ' + primerNombre(session.user.nombre), body);
   let d, offline;
-  try { ({ data: d, offline } = await cached('inicio')); } catch (e) { return fill(body, errorBox(e, inicio)); }
+  try { ({ data: d, offline } = await cached('inicio', {}, live(inicio))); } catch (e) { return fill(body, errorBox(e, inicio)); }
   setBadge(d.no_leidos);
   state.repartidor = !!d.repartidor;
   const a = d.asistencia, hd = d.hoy_detalle;
@@ -514,7 +520,7 @@ VIEWS.asistencia = async function asistencia(periodo, noEmpleado, nombre) {
   const body = h('div', {}, loading());
   screen(admin ? nombre : 'Mi asistencia', body, admin ? { back: () => go('equipo', periodo), sub: 'Asistencia' } : {});
   let a;
-  try { a = admin ? await api('asistenciaDe', { no_empleado: noEmpleado, periodo }) : (await cached('asistencia', { periodo })).data; }
+  try { a = admin ? await api('asistenciaDe', { no_empleado: noEmpleado, periodo }) : (await cached('asistencia', { periodo }, live(() => VIEWS.asistencia(periodo)))).data; }
   catch (e) { return fill(body, errorBox(e)); }
   const t = a.totales;
   const ver = p => admin ? VIEWS.asistencia(p, noEmpleado, nombre) : (state.tab = 'asistencia', VIEWS.asistencia(p));
@@ -549,7 +555,7 @@ VIEWS.nomina = async function nomina(tab = 'recibos') {
   screen('Mi nómina', body);
   try {
     if (tab === 'recibos') {
-      const { data: l } = await cached('recibos');
+      const { data: l } = await cached('recibos', {}, live(() => VIEWS.nomina(tab)));
       fill(body, body.firstChild,
         l.length ? l.map(r => h('button', { class: 'card tap rec', onclick: () => reciboView(r.recibo_id) },
           h('div', { class: 'row between' }, h('div', {}, h('h3', {}, r.etiqueta), h('span', { class: 'muted small' }, `${fecha(r.desde)} – ${fecha(r.hasta)} · ${r.recibo_id}`)),
@@ -557,7 +563,7 @@ VIEWS.nomina = async function nomina(tab = 'recibos') {
           h('div', { class: 'row between', style: 'margin-top:8px' }, reciboBadges(r), r.fecha_pago && h('span', { class: 'muted small' }, 'Pagado ' + fecha(r.fecha_pago)))))
           : empty('🧾', 'Cuando RH emita tu recibo de nómina aparecerá aquí y te llegará un aviso.'));
     } else {
-      const { data: l } = await cached('pagos');
+      const { data: l } = await cached('pagos', {}, live(() => VIEWS.nomina(tab)));
       const total = l.filter(p => p.fecha.slice(0, 4) === String(new Date().getFullYear())).reduce((s, p) => s + p.monto, 0);
       fill(body, body.firstChild,
         l.length ? [h('div', { class: 'kpis one' }, kpi('Depositado este año', money(total), `${l.length} depósito(s) registrados`)),
@@ -619,7 +625,7 @@ VIEWS.solicitudes = async function solicitudes() {
   const body = h('div', {}, loading());
   screen('Solicitudes', body, { actions: h('button', { class: 'icon-btn', 'aria-label': 'Nueva', onclick: () => nuevaSolicitud() }, '＋') });
   try {
-    const [{ data: l }, { data: pf }] = await Promise.all([cached('solicitudes'), cached('perfil')]);
+    const [{ data: l }, { data: pf }] = await Promise.all([cached('solicitudes', {}, live(solicitudes)), cached('perfil', {}, live(solicitudes))]);
     const v = pf.vacaciones;
     fill(body,
       h('div', { class: 'card vac' },
@@ -725,7 +731,7 @@ async function perfilView() {
   const body = h('div', {}, loading());
   screen('Mis datos', body, { back: () => go('mas') });
   try {
-    const { data: p } = await cached('perfil');
+    const { data: p } = await cached('perfil', {}, live(perfilView));
     const row = (l, v) => h('div', { class: 'kv' }, h('span', { class: 'muted' }, l), h('strong', {}, v || '—'));
     fill(body,
       h('div', { class: 'card' }, row('Nombre', p.nombre), row('No. empleado', p.no_empleado), row('Puesto', p.puesto), row('Área', p.area),
@@ -742,7 +748,7 @@ async function adeudosView() {
   const body = h('div', {}, loading());
   screen('Adeudos y cargos', body, { back: () => go(state.tab === 'inicio' ? 'inicio' : 'mas') });
   try {
-    const { data: d } = await cached('adeudos');
+    const { data: d } = await cached('adeudos', {}, live(adeudosView));
     const verCargos = esRepartidor() || d.cargos.length > 0;
     fill(body,
       h('div', { class: 'kpis' + (verCargos ? '' : ' one') }, kpi('Saldo de préstamos', money(d.saldo_total), 'se descuenta por quincena', d.saldo_total ? 'warn' : 'ok'),
@@ -796,7 +802,7 @@ async function bandeja() {
   const body = h('div', {}, loading());
   screen('Notificaciones', body, { back: () => go(prev) });
   try {
-    const l = await api('bandeja');
+    const { data: l } = await cached('bandeja', {}, live(bandeja));
     const ICON = { alta: '🆕', documentos: '📄', documento_rechazado: '⚠️', bienvenida: '👋', recibo: '🧾', pago: '💸', solicitud: '📝', aviso: '📢', adeudo: '💳', documento: '📄', alerta: '⚠️' };
     fill(body,
       l.some(n => !n.leido) && h('div', { class: 'row', style: 'justify-content:flex-end' }, h('button', { class: 'link', onclick: async () => { await api('marcarLeido', { todos: true }); setBadge(0); bandeja(); } }, 'Marcar todo como leído')),
@@ -828,7 +834,7 @@ VIEWS.panel = async function panel() {
   const body = h('div', {}, h('p', { class: 'muted cap' }, hoyLargo()), loading());
   screen('Panel', body, { actions: h('button', { class: 'icon-btn', 'aria-label': 'Actualizar', onclick: () => panel() }, '↻') });
   let d;
-  try { d = await api('panel'); } catch (e) { return fill(body, errorBox(e, panel)); }
+  try { d = (await cached('panel', {}, live(panel))).data; } catch (e) { return fill(body, errorBox(e, panel)); }
   const hr = d.hoy_resumen, q = d.quincena, n = d.nomina, df = d.datos_faltantes;
   const faltan = [df.sin_rfc && `${df.sin_rfc} sin RFC`, df.sin_clabe && `${df.sin_clabe} sin CLABE`, df.sin_salario && `${df.sin_salario} sin salario`, df.sin_horario && `${df.sin_horario} sin horario en checador`].filter(Boolean);
   fill(body,
@@ -879,7 +885,7 @@ VIEWS.equipo = async function equipo(periodo) {
   const body = h('div', {}, loading());
   screen('Asistencia del equipo', body);
   let d;
-  try { d = await api('asistenciaGeneral', { periodo }); } catch (e) { return fill(body, errorBox(e)); }
+  try { d = (await cached('asistenciaGeneral', { periodo }, live(() => VIEWS.equipo(periodo)))).data; } catch (e) { return fill(body, errorBox(e)); }
   const tot = d.empleados.reduce((a, e) => ({ f: a.f + e.totales.faltas, m: a.m + e.totales.min_total, j: a.j + e.totales.justificadas }), { f: 0, m: 0, j: 0 });
   fill(body,
     periodoPicker(periodo, p => VIEWS.equipo(p)),
@@ -1031,7 +1037,7 @@ VIEWS.personal = async function personal(filtro = 'activos', q = '') {
   const body = h('div', {}, loading());
   screen('Personal', body, { actions: h('button', { class: 'icon-btn', 'aria-label': 'Nuevo', onclick: () => personaView(null) }, '＋') });
   let l;
-  try { l = await api('personal'); } catch (e) { return fill(body, errorBox(e)); }
+  try { l = (await cached('personal', {}, live(() => VIEWS.personal(filtro, q)))).data; } catch (e) { return fill(body, errorBox(e)); }
   const incompleto = p => !p.rfc || !p.clabe || !p.salario_diario || !p.horario?.entrada;
   const search = h('input', { class: 'input', type: 'search', placeholder: 'Buscar por nombre o número', value: q });
   const list = h('div');
@@ -1271,7 +1277,7 @@ async function solicitudesAdmin(estatus = 'pendiente') {
   const body = h('div', {}, loading());
   screen('Solicitudes', body, { back: () => go('pmas') });
   try {
-    const l = await api('solicitudesAdmin', { estatus: estatus === 'todas' ? '' : estatus });
+    const l = (await cached('solicitudesAdmin', { estatus: estatus === 'todas' ? '' : estatus }, live(() => solicitudesAdmin(estatus)))).data;
     fill(body, h('div', { class: 'chips' }, [['pendiente', 'Pendientes'], ['aprobada', 'Aprobadas'], ['rechazada', 'Rechazadas'], ['todas', 'Todas']].map(([k, t]) =>
       h('button', { class: 'chip ' + (estatus === k ? 'on' : ''), onclick: () => solicitudesAdmin(k) }, t))),
       l.length ? l.map(s => solCard(s, s.estatus === 'pendiente' && h('div', { class: 'row', style: 'margin-top:10px' },
@@ -1330,7 +1336,7 @@ async function adeudosAdmin() {
   const body = h('div', {}, loading());
   screen('Adeudos y cargos', body, { back: () => go('pmas'), actions: h('button', { class: 'icon-btn', 'aria-label': 'Nuevo', onclick: () => nuevoAdeudo(null) }, '＋') });
   try {
-    const d = await api('adeudosAdmin');
+    const d = (await cached('adeudosAdmin', {}, live(adeudosAdmin))).data;
     const act = d.adeudos.filter(a => a.estatus === 'activo');
     fill(body,
       h('div', { class: 'kpis' }, kpi('Por cobrar', money0(act.reduce((s, a) => s + a.saldo, 0)), `${act.length} adeudo(s) activos`),
@@ -1399,7 +1405,7 @@ async function rutaView(back) {
   const body = h('div', {}, loading());
   screen('Mi ruta', body, { back, actions: h('button', { class: 'icon-btn', 'aria-label': 'Actualizar', onclick: () => rutaView(back) }, '↻') });
   let r, offline;
-  try { ({ data: r, offline } = await cached('miRuta')); } catch (e) { return fill(body, errorBox(e, () => rutaView(back))); }
+  try { ({ data: r, offline } = await cached('miRuta', {}, live(() => rutaView(back)))); } catch (e) { return fill(body, errorBox(e, () => rutaView(back))); }
   if (!r) return fill(body, empty('🗺️', 'Todavía no tienes ruta asignada. Te llega una notificación cuando esté lista.'));
   const color = r.color || '#e4572e';
   const mapEl = h('div', { class: 'ruta-map' }, h('div', { class: 'spinner' }));
@@ -1440,7 +1446,7 @@ async function rutasAdminView(f) {
   const body = h('div', {}, loading());
   screen('Rutas y reporte', body, { back: () => go(modoPatron() ? 'pmas' : 'mas') });
   let d;
-  try { d = await api('rutasAdmin', { fecha: f }); } catch (e) { return fill(body, errorBox(e, () => rutasAdminView(f))); }
+  try { d = (await cached('rutasAdmin', { fecha: f }, live(() => rutasAdminView(f)))).data; } catch (e) { return fill(body, errorBox(e, () => rutasAdminView(f))); }
   const rep = {}; (d.reporte || []).forEach(x => rep[x.ruta_id] = x);
   const generar = async () => { try { await busy('Consultando Shipday…', () => api('reporteRutas', { fecha: f })); toast('Reporte actualizado', 'ok'); rutasAdminView(f); } catch (e) { toast(e.message, 'error', 6000); } };
   fill(body,
@@ -1483,6 +1489,12 @@ function start() {
   if (!DEMO && !state.yo) { state.yo = true; api('yo').then(u => { if (u && (u.rol !== session.user.rol || u.repartidor !== session.user.repartidor)) { session.set(session.token, u); start(); } }).catch(() => {}); }
   state.tab = modoPatron() ? 'panel' : 'inicio';
   go(state.tab);
+  setTimeout(() => {
+    const per = periodoDe(new Date());
+    prefetch(modoPatron()
+      ? [['asistenciaGeneral', { periodo: per }], ['personal'], ['solicitudesAdmin', { estatus: 'pendiente' }], ['rutasAdmin', { fecha: isoHoy() }], ['bandeja']]
+      : [['asistencia', { periodo: per }], ['recibos'], ['pagos'], ['solicitudes'], ['perfil'], ['bandeja'], ['adeudos']].concat(esRepartidor() ? [['miRuta']] : []));
+  }, 1500);
   refreshPush((n, data) => {
     toast(`🔔 ${n.title || ''}${n.body ? ' — ' + n.body : ''}`, 'info', 6000);
     setBadge(state.noLeidos + 1);
