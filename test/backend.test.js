@@ -372,4 +372,102 @@ t('alta pública con documentos, revisión y aprobación', () => {
   assert(ok(call('panel', {}, admin)).docs_por_revisar >= 1);
 });
 
+
+// ── Rutas: claves, TomTom, publicar, Mi ruta y reporte Shipday
+t('rutas: claves en servidor, proxy TomTom, publicar, Mi ruta y reporte Shipday', () => {
+  const { ctx } = env;
+  const calls = [];
+  const resp = (code, obj) => ({ getResponseCode: () => code, getContentText: () => JSON.stringify(obj) });
+  const SD = {
+    'ML-111': [{ orderId: 9, orderNumber: 'ML-111', orderStatus: { orderState: 'ALREADY_DELIVERED' }, activityLog: { deliveryTime: '2026-10-12T16:40:00Z' }, assignedCarrier: { name: 'Saidd Lopez' } }],
+    'ML-222': [{ orderId: 8, orderNumber: 'ML-222', orderStatus: { orderState: 'ALREADY_DELIVERED' }, activityLog: { deliveryTime: '2026-10-12 16:20:00' }, assignedCarrier: { name: 'Saidd Lopez' } }],
+    'ML-333': [{ orderId: 7, orderNumber: 'ML-333', orderStatus: { orderState: 'FAILED_DELIVERY' }, activityLog: {}, assignedCarrier: { name: 'Angel Campos' } }],
+  };
+  const fetchOne = (url, o) => {
+    calls.push(url);
+    if (/fcm\.googleapis/.test(url)) { env.pushes.push(JSON.parse(o.payload).message); return resp(200, {}); }
+    if (/tomtom/.test(url)) {
+      if (/key=MALA/.test(url)) return resp(403, { detailedError: { message: 'bad key' } });
+      const n = url.split('/calculateRoute/')[1].split('/json')[0].split(':').length;
+      return resp(200, { routes: [{ legs: Array.from({ length: n - 1 }, (_, i) => ({ summary: { travelTimeInSeconds: 600 + i, lengthInMeters: 3000 }, points: Array.from({ length: 200 }, (_, k) => ({ latitude: 19.4 + k / 1e4, longitude: -99.1 })) })) }] });
+    }
+    if (/shipday\.com\/carriers/.test(url)) return resp(o.headers.Authorization === 'Basic SDKEY' ? 200 : 401, []);
+    if (/shipday\.com\/orders\//.test(url)) { const num = decodeURIComponent(url.split('/orders/')[1]); return SD[num] ? resp(200, SD[num]) : resp(404, { message: 'not found' }); }
+    return resp(404, {});
+  };
+  ctx.UrlFetchApp = { fetch: fetchOne, fetchAll: reqs => reqs.map(r => fetchOne(r.url, r)) };
+
+  // sin key: error claro; con key mala no se guarda; con buena sí y nunca se devuelve
+  fail(call('tomtomRutas', { rutas: [{ locs: [[19.4, -99.1], [19.5, -99.2]] }] }, admin), /Falta la key de TomTom/);
+  fail(call('guardarClaves', { tomtom: 'MALA' }, admin), /TomTom rechazó/);
+  fail(call('guardarClaves', { tomtom: 'BUENA' }, tok4), /Sin permiso/);
+  assert.deepStrictEqual(ok(call('guardarClaves', { tomtom: 'BUENA' }, admin)), { tomtom: true });
+  fail(call('guardarClaves', { shipday: 'OTRA' }, admin), /Shipday rechazó/);
+  ok(call('guardarClaves', { shipday: 'SDKEY' }, admin));
+  const cfg = ok(call('rutasConfig', {}, admin));
+  assert(cfg.tomtom && cfg.shipday && !JSON.stringify(cfg).includes('BUENA') && !JSON.stringify(cfg).includes('SDKEY'));
+  assert(cfg.empleados.some(e => e.no_empleado === '4'));
+
+  // proxy TomTom: una ruta de 3 paradas → 3 tramos con geometría reducida
+  const tt = ok(call('tomtomRutas', { rutas: [{ locs: [[19.41, -99.13], [19.5, -99.2], [19.52, -99.21], [19.53, -99.22]] }], departAt: '2026-10-12T17:00:00-06:00', mode: 'motorcycle' }, admin));
+  assert.strictEqual(tt.rutas[0].legs.length, 3);
+  assert(tt.rutas[0].legs[0].pts.length <= 61);
+  assert(calls.some(u => /travelMode=motorcycle/.test(u) && /traffic=true/.test(u) && /departAt=2026-10-12T17%3A00%3A00-06%3A00/.test(u)));
+
+  // publicar: valida duplicados, guarda y avisa al repartidor
+  const ruta = { no_empleado: '4', num: 1, total: 1, salida: '10:00', fin: '11:20', km: 12.3, color: '#e4572e', deposito: [19.4182, -99.1369],
+    paradas: [
+      { orden: 1, eta: '10:15', envios: ['222'], dir: 'Calle 1, Coyoacán', ref: 'Ana', lat: 19.5, lng: -99.2, espera: 10 },
+      { orden: 2, eta: '10:35', envios: ['111'], dir: 'Calle 2', ref: 'Luis', lat: 19.52, lng: -99.21, espera: 10 },
+      { orden: 3, eta: '10:55', envios: ['333', '444'], dir: 'Calle 3', ref: '', lat: 19.53, lng: -99.22, espera: 12 }],
+    geom: Array.from({ length: 3000 }, (_, k) => [19.4 + k / 1e5, -99.1]) };
+  fail(call('publicarRutas', { fecha: '2026-10-12', rutas: [ruta, Object.assign({}, ruta, { num: 2 })] }, admin), /más de una ruta/);
+  const pub = ok(call('publicarRutas', { fecha: '2026-10-12', rutas: [ruta] }, admin));
+  assert.strictEqual(pub.publicadas, 1);
+  assert(/Tu ruta de hoy/.test(ok(call('bandeja', {}, tok4))[0].titulo));
+  // el empleado la ve en Inicio y en Mi ruta (con paradas y geometría)
+  assert.strictEqual(ok(call('inicio', {}, tok4)).ruta.paradas, 3);
+  const mi = ok(call('miRuta', {}, tok4));
+  assert.strictEqual(mi.paradas.length, 3);
+  assert.strictEqual(mi.salida, '10:00');
+  assert(mi.geom.length > 10);
+  assert.strictEqual(ok(call('miRuta', {}, ok(call('login', { rfc: 'RUCA990909MX1', pin: '135791' })).token)), null);
+  // volver a publicar reemplaza la anterior
+  ok(call('publicarRutas', { fecha: '2026-10-12', rutas: [ruta] }, admin));
+  assert.strictEqual(ok(call('rutasAdmin', { fecha: '2026-10-12' }, admin)).rutas.length, 1);
+
+  // reporte Shipday: 222 entregado 10:20 (antes que 111 a 10:40 → orden correcto), 333 fallido, 444 no existe
+  const rep = ok(call('reporteRutas', { fecha: '2026-10-12' }, admin));
+  const r = rep.reporte[0];
+  assert.strictEqual(r.envios, 4);
+  assert.strictEqual(r.entregados, 2);
+  assert.strictEqual(r.no_entregados, 2);
+  assert.strictEqual(r.en_orden, 2);
+  assert.strictEqual(r.fuera_orden, 0);
+  assert.strictEqual(r.fin_real, '10:40');
+  assert.strictEqual(r.otros_repartidores, 'Angel Campos');
+  assert.strictEqual(r.calificacion, 'Mal');
+  assert.strictEqual(r.detalle[0].real, '10:20');
+  assert.strictEqual(r.detalle[2].estado, 'fallido');
+  assert(calls.some(u => /orders\/ML-111/.test(u)));
+  assert.strictEqual(ok(call('rutasAdmin', { fecha: '2026-10-12' }, admin)).reporte.length, 1);
+  // orden invertido cuenta como fuera de orden
+  SD['ML-222'][0].activityLog.deliveryTime = '2026-10-12T17:00:00Z';
+  const r2 = ok(call('reporteRutas', { fecha: '2026-10-12' }, admin)).reporte[0];
+  assert.strictEqual(r2.fuera_orden, 1);
+  assert.strictEqual(ok(call('rutasAdmin', { fecha: '2026-10-12' }, admin)).reporte[0].fuera_orden, 1);
+  // la tarea automática no corre antes de la hora configurada
+  const antes = env.mails.length;
+  run('tareaReporteRutas');
+  assert.strictEqual(env.mails.length, antes);
+  maestro.getSheetByName('ConfigPortal').data.find(r => r[0] === 'RUTA_REPORTE_HORA')[1] = '0';
+  run('tareaReporteRutas');
+  assert.strictEqual(env.mails.length, antes + 1);
+  assert(/Reporte de rutas 2026-10-12/.test(env.mails[env.mails.length - 1].s));
+  run('tareaReporteRutas');
+  assert.strictEqual(env.mails.length, antes + 1, 'solo una vez al día');
+  const muestra = ok(call('shipdayMuestra', { shipment: 'ML-111' }, admin));
+  assert(muestra.info.entregado && /ALREADY_DELIVERED/.test(muestra.crudo));
+});
+
 console.log(`\n${passed} pruebas OK`);

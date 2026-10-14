@@ -362,6 +362,10 @@ VIEWS.inicio = async function inicio() {
       h('div', { class: 'row between' }, h('h3', {}, '👋 Tu bienvenida'), h('span', { class: 'muted small' }, `${d.bienvenida.hechos} de ${d.bienvenida.total}`)),
       h('div', { class: 'bar' }, h('span', { style: `width:${Math.round(d.bienvenida.hechos / d.bienvenida.total * 100)}%` })),
       h('p', { class: 'small' }, 'Siguiente: ', h('strong', {}, d.bienvenida.siguiente)), h('span', { class: 'btn primary sm' }, 'Continuar')),
+    d.ruta && h('button', { class: 'card tap ruta-card', onclick: () => rutaView() },
+      h('div', { class: 'row between' }, h('h3', {}, '🗺️ ' + (d.ruta.fecha === d.hoy ? 'Tu ruta de hoy' : 'Tu ruta del ' + fecha(d.ruta.fecha))), h('span', { class: 'chev' }, '›')),
+      h('p', { class: 'small' }, h('strong', {}, `${d.ruta.paradas} paradas`), ` · ${d.ruta.envios} envíos · sales ${d.ruta.salida} · terminas aprox ${d.ruta.fin}`),
+      h('span', { class: 'btn primary sm' }, 'Ver mapa y paradas')),
     d.recibos_sin_firmar > 0 && h('button', { class: 'banner action warn', onclick: () => go('nomina') },
       h('strong', {}, `🧾 Tienes ${d.recibos_sin_firmar} recibo${d.recibos_sin_firmar > 1 ? 's' : ''} por firmar`), h('span', {}, 'Revísalo y confirma de recibido →')),
 
@@ -695,6 +699,7 @@ VIEWS.mas = async function mas() {
       h('div', {}, h('h3', {}, '🏢 Cambiar a modo patrón'), h('p', { class: 'muted small' }, 'Panel, prenómina, recibos, pagos y personal')), h('span', { class: 'chev' }, '›')),
     menu([
       ['👋', 'Mi bienvenida', 'Pasos para empezar a trabajar', bienvenidaView],
+      esRepartidor() && ['🗺️', 'Mi ruta', 'Paradas en orden y mapa', () => rutaView()],
       esRepartidor() && ['📱', 'Apps y accesos', 'Instala y abre tus apps de trabajo', () => appsView('instalar')],
       ['👤', 'Mis datos', 'RFC, CLABE, horario, antigüedad', perfilView],
       ['💳', 'Adeudos y cargos', 'Préstamos, anticipos y cargos de flotilla', adeudosView],
@@ -1246,6 +1251,7 @@ VIEWS.pmas = function pmas() {
     h('button', { class: 'card tap row between switch emp', onclick: () => { session.modo = 'empleado'; start(); } },
       h('div', {}, h('h3', {}, '👤 Ver mi portal de empleado'), h('p', { class: 'muted small' }, 'Tu asistencia, tus recibos y depósitos')), h('span', { class: 'chev' }, '›')),
     menu([
+      ['🗺️', 'Rutas y reporte', 'Ruteador, rutas publicadas y reporte de Shipday', () => rutasAdminView()],
       ['📝', 'Solicitudes', 'Justificantes, vacaciones, permisos, anticipos', () => solicitudesAdmin()],
       ['📢', 'Avisos', 'Comunicados por notificación', enviarAvisoView],
       ['💳', 'Adeudos y cargos', 'Préstamos y cargos de flotilla', () => adeudosAdmin()],
@@ -1349,6 +1355,123 @@ async function adeudosAdmin() {
       ], d.cargos) : empty('🛵', 'La flotilla no tiene cargos a empleados.'),
       h('p', { class: 'muted small' }, 'Los cargos vienen de las reparaciones cerradas en la app de flotilla con monto al empleado. Se descuentan en la siguiente prenómina. Para ligarlos, captura el ID de flotilla en el expediente de cada empleado.'));
   } catch (e) { fill(body, errorBox(e)); }
+}
+
+
+// ═════════ Rutas ═════════
+let leafletP = null;
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  return (leafletP = leafletP || new Promise((res, rej) => {
+    document.head.append(h('link', { rel: 'stylesheet', href: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css' }));
+    const sc = h('script', { src: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js' });
+    sc.onload = () => res(window.L);
+    sc.onerror = () => { leafletP = null; rej(new Error('No se pudo cargar el mapa (revisa tu señal).')); };
+    document.head.append(sc);
+  }));
+}
+const navUrl = p => `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}&travelmode=driving`;
+const wazeUrl = p => `https://waze.com/ul?ll=${p.lat},${p.lng}&navigate=yes`;
+const isoHoy = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+
+/** Mapa de la ruta: círculos numerados, línea del recorrido y la base. Devuelve una función para enfocar una parada. */
+async function rutaMapa(el, r) {
+  const L = await loadLeaflet();
+  const color = r.color || '#e4572e';
+  const map = L.map(el, { zoomControl: true, attributionControl: true });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+  const dep = r.deposito || [19.4182, -99.1369];
+  const line = r.geom && r.geom.length > 1 ? r.geom : [dep].concat(r.paradas.map(p => [p.lat, p.lng]));
+  L.polyline(line, { color, weight: 5, opacity: 0.75 }).addTo(map);
+  L.marker(dep, { icon: L.divIcon({ className: 'map-dep', html: '<div>C</div>', iconSize: [26, 26] }), zIndexOffset: 1000 }).addTo(map).bindTooltip('Salida: Lassaga 54');
+  const marks = r.paradas.map((p, i) => L.marker([p.lat, p.lng], { icon: L.divIcon({ className: 'map-pin', html: `<div style="background:${color}">${i + 1}</div>`, iconSize: [26, 26] }) })
+    .addTo(map).bindPopup(`<b>${i + 1}. ~${p.eta || ''}</b><br>${(p.envios || []).join(', ')}<br>${String(p.ref || '').replace(/</g, '&lt;')}`));
+  map.fitBounds(L.latLngBounds([dep].concat(r.paradas.map(p => [p.lat, p.lng]))), { padding: [24, 24] });
+  setTimeout(() => map.invalidateSize(), 200);
+  return i => { map.setView([r.paradas[i].lat, r.paradas[i].lng], 16); marks[i].openPopup(); el.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+}
+
+async function rutaView(back) {
+  const prev = state.tab;
+  back = back || (() => go(prev === 'mas' ? 'mas' : 'inicio'));
+  const body = h('div', {}, loading());
+  screen('Mi ruta', body, { back, actions: h('button', { class: 'icon-btn', 'aria-label': 'Actualizar', onclick: () => rutaView(back) }, '↻') });
+  let r, offline;
+  try { ({ data: r, offline } = await cached('miRuta')); } catch (e) { return fill(body, errorBox(e, () => rutaView(back))); }
+  if (!r) return fill(body, empty('🗺️', 'Todavía no tienes ruta asignada. Te llega una notificación cuando esté lista.'));
+  const color = r.color || '#e4572e';
+  const mapEl = h('div', { class: 'ruta-map' }, h('div', { class: 'spinner' }));
+  let enfocar = null;
+  fill(body,
+    offline && h('div', { class: 'banner warn' }, 'Sin conexión: mostrando la última ruta que se cargó.'),
+    r.fecha !== isoHoy() && h('div', { class: 'banner info' }, 'Esta es tu ruta del ' + fecha(r.fecha) + '.'),
+    h('div', { class: 'kpis' },
+      kpi('Paradas', r.paradas.length, `${r.envios} envíos`),
+      kpi('Salida', r.salida, 'desde Lassaga 54'),
+      kpi('Terminas', r.fin, 'aprox.'),
+      kpi('Distancia', num(r.km, 1) + ' km', `Ruta ${r.num} de ${r.total}`)),
+    mapEl,
+    section('Paradas en orden · toca una para verla en el mapa'),
+    r.paradas.map((p, i) => h('div', { class: 'card parada', onclick: () => enfocar && enfocar(i) },
+      h('div', { class: 'row gap8' },
+        h('span', { class: 'pnum', style: `background:${color}` }, i + 1),
+        h('div', { class: 'grow' },
+          h('div', { class: 'row between' }, h('strong', {}, '~' + (p.eta || '')), p.tipo === 'same_day' ? h('span', { class: 'badge b-warn' }, 'Mismo día') : null),
+          h('div', { class: 'small' }, h('strong', {}, (p.envios || []).length > 1 ? `Envíos (${p.envios.length}): ` : 'Envío: '), (p.envios || []).join(', ')),
+          p.ref && h('div', { class: 'small' }, p.ref),
+          h('div', { class: 'muted small' }, p.dir || `${p.lat}, ${p.lng}`),
+          p.espera ? h('div', { class: 'muted tiny' }, `Espera ${p.espera} min`) : null)),
+      h('div', { class: 'row gap8 wrap', style: 'margin-top:8px' },
+        h('a', { class: 'btn sm primary', href: navUrl(p), target: '_blank', rel: 'noopener', onclick: e => e.stopPropagation() }, '🧭 Navegar'),
+        h('a', { class: 'btn sm', href: wazeUrl(p), target: '_blank', rel: 'noopener', onclick: e => e.stopPropagation() }, 'Waze'),
+        p.tel && h('a', { class: 'btn sm', href: 'tel:' + p.tel, onclick: e => e.stopPropagation() }, '📞 Llamar')))),
+    h('p', { class: 'muted small center' }, 'Si una dirección está mal, avísale a tu coordinador antes de salir.'));
+  try { mapEl.replaceChildren(); enfocar = await rutaMapa(mapEl, r); } catch (e) { fill(mapEl, h('p', { class: 'muted small center', style: 'padding:20px' }, e.message)); }
+}
+
+const CAL = { Bien: 'ok', Regular: 'warn', Mal: 'err', 'Sin datos': 'muted' };
+const EST_PARADA = { entregado: ['Entregado', 'ok'], parcial: ['Parcial', 'warn'], fallido: ['Fallido', 'err'], pendiente: ['Sin entregar', 'err'], no_en_shipday: ['No está en Shipday', 'muted'] };
+async function rutasAdminView(f) {
+  state.tab = 'pmas';
+  f = f || isoHoy();
+  const body = h('div', {}, loading());
+  screen('Rutas y reporte', body, { back: () => go('pmas') });
+  let d;
+  try { d = await api('rutasAdmin', { fecha: f }); } catch (e) { return fill(body, errorBox(e, () => rutasAdminView(f))); }
+  const rep = {}; (d.reporte || []).forEach(x => rep[x.ruta_id] = x);
+  const generar = async () => { try { await busy('Consultando Shipday…', () => api('reporteRutas', { fecha: f })); toast('Reporte actualizado', 'ok'); rutasAdminView(f); } catch (e) { toast(e.message, 'error', 6000); } };
+  fill(body,
+    h('div', { class: 'row gap8' }, h('input', { type: 'date', value: f, class: 'grow', onchange: e => rutasAdminView(e.target.value) }),
+      h('a', { class: 'btn primary', href: 'ruteador.html' }, '🧭 Ruteador')),
+    section(`Rutas publicadas (${d.rutas.length})`),
+    d.rutas.length ? table([
+      { t: 'Ruta', f: r => h('strong', {}, r.num + '/' + r.total) },
+      { t: 'Repartidor', f: r => h('div', {}, h('strong', {}, r.nombre), h('div', { class: 'muted tiny' }, r.visto ? '👁 vista ' + r.visto.slice(11) : 'sin abrir')) },
+      { t: 'Paradas', cls: 'num', f: r => `${r.paradas} (${r.envios})` },
+      { t: 'Horario', f: r => `${r.salida}–${r.fin}` },
+      { t: 'Shipday', f: r => rep[r.ruta_id] ? h('span', { class: 'badge b-' + CAL[rep[r.ruta_id].calificacion] }, rep[r.ruta_id].calificacion) : '—' },
+    ], d.rutas) : empty('🗺️', 'No hay rutas publicadas para este día. Ármalas en el ruteador y toca "Publicar en la super app".'),
+    section('Reporte contra Shipday'),
+    !d.shipday ? h('div', { class: 'banner warn' }, 'Falta la key de Shipday. Guárdala en el ruteador → Claves del servidor.')
+      : d.rutas.length ? h('div', {},
+        h('button', { class: 'btn block', onclick: generar }, d.reporte.length ? '↻ Actualizar reporte' : 'Generar reporte ahora'),
+        h('p', { class: 'muted small' }, 'Se genera solo cada noche y te llega por correo. Compara el orden y la hora de cada entrega en Shipday (ML-número) contra lo planeado.')) : null,
+    (d.reporte || []).sort((a, b) => a.nombre.localeCompare(b.nombre)).map(x => h('details', { class: 'card' },
+      h('summary', { class: 'row between' }, h('strong', {}, x.nombre), h('span', { class: 'badge b-' + CAL[x.calificacion] }, x.calificacion)),
+      h('div', { class: 'kpis', style: 'margin-top:8px' },
+        kpi('Entregados', `${x.entregados}/${x.envios}`, x.no_entregados ? `${x.no_entregados} sin entregar` : 'todos', x.no_entregados ? 'err' : 'ok'),
+        kpi('En orden', x.pct_orden + '%', x.fuera_orden ? `${x.fuera_orden} parada(s) fuera de orden` : 'siguió el orden', x.pct_orden < 85 ? 'warn' : 'ok'),
+        kpi('Tarde', x.tarde, `retraso prom. ${x.retraso_prom} min`, x.tarde ? 'warn' : ''),
+        kpi('Terminó', x.fin_real || '—', 'planeado ' + x.fin_plan, x.fin_real && x.fin_real > x.fin_plan ? 'warn' : '')),
+      x.otros_repartidores && h('div', { class: 'banner warn small' }, 'En Shipday aparece entregado por: ' + x.otros_repartidores),
+      table([
+        { t: '#', f: p => p.o },
+        { t: 'Plan', f: p => p.eta },
+        { t: 'Real', f: p => p.real || '—' },
+        { t: 'Dif.', cls: 'num', f: p => p.dif == null ? '' : h('span', { class: p.dif > 20 ? 'late' : '' }, (p.dif > 0 ? '+' : '') + p.dif + ' min') },
+        { t: 'Estado', f: p => { const [l, c] = EST_PARADA[p.estado] || [p.estado, 'muted']; return h('span', { class: 'badge b-' + c }, l + (p.envios > 1 ? ` ${p.entregados}/${p.envios}` : '')); } },
+      ], x.detalle || []),
+      h('p', { class: 'muted tiny' }, 'Generado ' + x.generado))));
 }
 
 // ═════════ Arranque ═════════

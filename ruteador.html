@@ -1,0 +1,981 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Optimizador de Rutas</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f4f5f7;--card:#ffffff;--fg:#15181d;--muted:#5f6875;--line:#e1e4e9;--chip:#eef1f5;
+  --accent:#e4572e;--accent-fg:#ffffff;--ok:#16834a;--ok-bg:#e7f6ee;--warn:#a85d00;--warn-bg:#fff4e0;
+  --bad:#c42020;--bad-bg:#fdecec;--info:#1f5fbf;--info-bg:#e9f1fd;--input:#ffffff;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#111317;--card:#1a1d23;--fg:#e8eaed;--muted:#9aa3ae;--line:#2c3139;--chip:#242930;
+    --accent:#ff6a3d;--accent-fg:#ffffff;--ok:#4cc985;--ok-bg:#16301f;--warn:#f0a43a;--warn-bg:#33270f;
+    --bad:#ff6b6b;--bad-bg:#3a1717;--info:#7fb0ff;--info-bg:#16243a;--input:#14171c;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#111317;--card:#1a1d23;--fg:#e8eaed;--muted:#9aa3ae;--line:#2c3139;--chip:#242930;
+  --accent:#ff6a3d;--accent-fg:#ffffff;--ok:#4cc985;--ok-bg:#16301f;--warn:#f0a43a;--warn-bg:#33270f;
+  --bad:#ff6b6b;--bad-bg:#3a1717;--info:#7fb0ff;--info-bg:#16243a;--input:#14171c;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.45}
+header{padding:16px 20px;border-bottom:1px solid var(--line);background:var(--card);display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+header h1{font-size:18px;margin:0}
+header span{color:var(--muted);font-size:13px}
+.wrap{display:grid;grid-template-columns:370px 1fr;gap:16px;padding:16px;max-width:1500px;margin:0 auto}
+@media (max-width:900px){.wrap{grid-template-columns:1fr;padding:12px 16px}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+.card h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:0 0 10px}
+label{display:block;font-size:12.5px;color:var(--muted);margin:8px 0 3px}
+input,select{width:100%;padding:8px 9px;border:1px solid var(--line);border-radius:8px;background:var(--input);color:var(--fg);font:inherit}
+input[type=checkbox]{width:auto;margin-right:6px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.check{display:flex;align-items:center;font-size:13px;color:var(--fg);margin-top:10px}
+.hint{font-size:12px;color:var(--muted);margin-top:4px}
+button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid var(--line);background:var(--chip);color:var(--fg);padding:8px 12px}
+button:hover{filter:brightness(.97)}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg);font-weight:600;width:100%;padding:12px;font-size:15px}
+button:disabled{opacity:.55;cursor:wait}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.btns button{flex:1 1 auto}
+a{color:var(--info)}
+#map{height:440px;border-radius:12px;border:1px solid var(--line);z-index:0}
+.status{font-size:13px;color:var(--muted);margin-top:10px;min-height:18px}
+.bar{height:6px;background:var(--chip);border-radius:3px;overflow:hidden;margin-top:6px}
+.bar>div{height:100%;width:0;background:var(--accent);transition:width .2s}
+.alert{border-radius:10px;padding:12px 14px;margin:12px 0;font-size:14px}
+.alert.bad{background:var(--bad-bg);color:var(--bad);border:1px solid color-mix(in srgb,var(--bad) 35%,transparent)}
+.alert.warn{background:var(--warn-bg);color:var(--warn)}
+.alert.ok{background:var(--ok-bg);color:var(--ok)}
+.alert.info{background:var(--info-bg);color:var(--info)}
+.alert b{font-weight:700}
+.alert .big{font-size:20px;font-weight:700;display:block;margin-bottom:4px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+.chip{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px;min-width:110px}
+.chip small{display:block;color:var(--muted);font-size:11.5px}
+.chip strong{font-size:17px}
+.tbl{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.tbl th,.tbl td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;font-size:13px;white-space:nowrap}
+.tbl th{color:var(--muted);font-weight:600;font-size:12px;background:var(--chip)}
+.tbl tr.sel td{background:var(--chip)}
+.tblwrap{overflow-x:auto;border-radius:12px}
+.dot{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:middle;margin-right:6px}
+.st-ok{color:var(--ok);font-weight:600}.st-bad{color:var(--bad);font-weight:600}
+.toggle{display:flex;gap:6px;margin:8px 0}
+.toggle button.on{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+details.route{background:var(--card);border:1px solid var(--line);border-radius:10px;margin:8px 0}
+details.route summary{padding:10px 12px;cursor:pointer;font-weight:600}
+details.route ol{margin:0;padding:0 12px 10px 34px}
+details.route li{padding:4px 0;border-top:1px dashed var(--line);font-size:13px}
+details.route li span{color:var(--muted)}
+.pin div{width:22px;height:22px;border-radius:50%;color:#fff;font:700 11px/22px Inter,sans-serif;text-align:center;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4)}
+.depot div{width:26px;height:26px;border-radius:6px;background:#111;color:#fff;font:700 13px/26px Inter,sans-serif;text-align:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5)}
+.muted{color:var(--muted)}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+#mapping{display:none}
+.pw{display:flex;gap:6px}.pw input{flex:1}
+</style>
+</head>
+<body>
+<header>
+  <a href="./" style="text-decoration:none;font-size:14px">← Portal</a>
+  <h1>Ruteador · Packatelas</h1>
+  <span id="who">Salida única desde Lassaga 54 · rutas abiertas</span>
+</header>
+<div id="gate" class="alert bad" style="display:none;margin:16px"></div>
+
+<div class="wrap">
+  <aside>
+    <div class="card">
+      <h2>1 · Envíos</h2>
+      <input type="file" id="file" accept=".xlsx,.xls,.csv">
+      <div class="hint">Reconoce tu log de Mercado Libre (Shipment, Dirección, Ciudad, CP, Latitud, Longitud, Destinatario, Estado ML) aunque cambie el orden de columnas. Si falta alguna obligatoria te pide mapearla. <a href="#" id="tpl">Plantilla simple</a></div>
+      <div id="fileInfo" class="status"></div>
+      <a href="#" id="mapToggle" style="display:none;font-size:13px">Ver / cambiar columnas</a>
+      <div id="mapWarn" class="alert bad" style="display:none"></div>
+      <div id="mapping">
+        <div class="row">
+          <div><label>Nº de envío *</label><select id="m_envio"></select></div>
+          <div><label>Dirección *</label><select id="m_dir"></select></div>
+        </div>
+        <div class="row">
+          <div><label>Latitud *</label><select id="m_lat"></select></div>
+          <div><label>Longitud *</label><select id="m_lng"></select></div>
+        </div>
+        <div class="row">
+          <div><label>Ciudad / municipio</label><select id="m_city"></select></div>
+          <div><label>Código postal</label><select id="m_cp"></select></div>
+        </div>
+        <div class="row">
+          <div><label>Destinatario</label><select id="m_name"></select></div>
+          <div><label>Teléfono</label><select id="m_tel"></select></div>
+        </div>
+        <div class="row">
+          <div><label>Estado del envío</label><select id="m_estado"></select></div>
+          <div><label>Espera (min)</label><select id="m_espera"></select></div>
+        </div>
+        <div class="row">
+          <div><label>Tipo de envío</label><select id="m_tipo"></select></div>
+          <div></div>
+        </div>
+        <div class="btns"><button type="button" id="mapReset">Volver a detectar</button></div>
+      </div>
+      <label class="check"><input type="checkbox" id="skipDone" checked>Omitir entregados y cancelados (columna de estado)</label>
+      <label class="check"><input type="checkbox" id="group" checked>Juntar envíos con las mismas coordenadas en una sola parada</label>
+    </div>
+
+    <div class="card">
+      <h2>2 · Horario y repartidores</h2>
+      <label>Fecha</label><input type="date" id="date">
+      <div class="row">
+        <div><label>Hora de salida</label><input type="time" id="tStart" value="10:00"></div>
+        <div><label>Hora máxima de término</label><input type="time" id="tEnd" value="19:00"></div>
+      </div>
+      <div class="row3">
+        <div><label>Repartidores</label><input type="number" id="drivers" min="1" value="5"></div>
+        <div><label>Espera/parada</label><input type="number" id="wait" min="0" value="10"></div>
+        <div><label>+min/envío extra</label><input type="number" id="extra" min="0" value="2"></div>
+      </div>
+      <div class="hint">La espera es en minutos. “+min/envío extra” se suma cuando una parada tiene varios envíos.</div>
+    </div>
+
+    <div class="card">
+      <h2>3 · Tráfico</h2>
+      <div id="keysState" class="hint" style="font-size:13px">Revisando claves del servidor…</div>
+      <div class="btns" style="margin-top:4px"><button type="button" id="keysEdit">Claves del servidor</button></div>
+      <div id="keysBox" style="display:none">
+        <label>TomTom API key (Routing API)</label><input type="password" id="kTomtom" placeholder="Pega la key nueva" autocomplete="off">
+        <label>Shipday API key</label><input type="password" id="kShipday" placeholder="Pega la key nueva" autocomplete="off">
+        <div class="btns"><button type="button" id="keysSave">Guardar en el servidor</button></div>
+        <div class="hint">Se prueban antes de guardarse y quedan solo en el Apps Script del portal: sirven desde cualquier navegador y nunca se muestran.</div>
+      </div>
+      <div class="row">
+        <div><label>Vehículo</label><select id="ttMode"><option value="motorcycle">Moto</option><option value="car">Auto</option></select></div>
+        <div><label>Calidad</label><select id="quality"><option value="1500">Rápida</option><option value="4000" selected>Normal</option><option value="10000">Alta</option></select></div>
+      </div>
+      <div class="row">
+        <div><label>Factor de tráfico</label><input type="number" id="factor" step="0.05" min="0.5" value="1.55"></div>
+        <div><label>Ajuste de tiempo</label><input type="number" id="adj" step="0.05" min="0.3" value="1"></div>
+      </div>
+      <div class="hint" id="factorHint">Sin TomTom se usa el factor (OSRM calcula sin tráfico). Con TomTom se mide el tráfico real y el factor se recalibra solo y se recuerda por hora. “Ajuste” multiplica todos los tiempos de manejo (ej. 0.85 si las motos van más rápido que lo calculado).</div>
+    </div>
+
+    <div class="card">
+      <h2>Impresión (térmica 80 mm)</h2>
+      <div class="row">
+        <div><label>Ancho imprimible (mm)</label><input type="number" id="pw" min="40" max="80" step="1" value="72"></div>
+        <div><label>Tamaño de letra</label><select id="fs"><option value="1">Normal</option><option value="1.15" selected>Grande</option><option value="1.3">Muy grande</option></select></div>
+      </div>
+      <div class="hint">Si el ticket sale cortado del lado derecho baja el ancho a 70 o 68. Recomendado: botón “Imprimir” (directo desde el navegador) en lugar del PDF.</div>
+    </div>
+
+    <div class="card">
+      <h2>Origen</h2>
+      <div class="row">
+        <div><label>Latitud</label><input type="number" id="dLat" step="0.000001"></div>
+        <div><label>Longitud</label><input type="number" id="dLng" step="0.000001"></div>
+      </div>
+      <div class="btns">
+        <button id="geoDepot" type="button">Ubicar Lassaga 54</button>
+        <button id="moveDepot" type="button">Mover en el mapa</button>
+      </div>
+      <div class="hint">Confirma una vez que el cuadro negro “C” esté en la puerta de Computenga; se guarda en este navegador.</div>
+    </div>
+
+    <button class="primary" id="run">Optimizar rutas</button>
+    <div class="status" id="status"></div>
+    <div class="bar"><div id="prog"></div></div>
+  </aside>
+
+  <main>
+    <div id="map"></div>
+    <div id="results"><p class="muted" style="margin-top:14px">Sube tu Excel, ajusta horario y repartidores y presiona “Optimizar rutas”.</p></div>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script type="module">
+import { CONFIG } from './js/config.js';
+/*CORE-START*/
+// ===== Motor de optimización (VRP abierto con límite de duración) =====
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function routeDur(r,T,svc){let t=0,p=0;for(let k=0;k<r.length;k++){const x=r[k];t+=T[p][x]+svc[x];p=x;}return t;}
+function insertDur(r,d,pos,x,T,svc){const prev=pos===0?0:r[pos-1];let nd=d+T[prev][x]+svc[x];if(pos<r.length){const nx=r[pos];nd+=T[x][nx]-T[prev][nx];}return nd;}
+function removeDur(r,d,i,T,svc){const x=r[i],prev=i===0?0:r[i-1];let nd=d-T[prev][x]-svc[x];if(i+1<r.length){const nx=r[i+1];nd+=T[prev][nx]-T[x][nx];}return nd;}
+function replaceDur(r,d,i,y,T,svc){const x=r[i],prev=i===0?0:r[i-1];let nd=d-T[prev][x]-svc[x]+T[prev][y]+svc[y];if(i+1<r.length){const nx=r[i+1];nd+=T[y][nx]-T[x][nx];}return nd;}
+function prefixDur(r,T,svc){const out=new Array(r.length);let t=0,p=0;for(let k=0;k<r.length;k++){t+=T[p][r[k]]+svc[r[k]];out[k]=t;p=r[k];}return out;}
+function suffixDur(r,T,svc){const n=r.length,out=new Array(n);if(!n)return out;out[n-1]=0;for(let k=n-2;k>=0;k--){out[k]=T[r[k]][r[k+1]]+svc[r[k+1]]+out[k+1];}return out;}
+
+function regretInsert(routes,durs,list,T,svc,cost){
+  const un=list.slice();
+  while(un.length){
+    let bi=-1,br=-1,bp=-1,bd=0,breg=-Infinity,bb1=Infinity;
+    for(let u=0;u<un.length;u++){
+      const x=un[u];let b1=Infinity,b2=Infinity,r1=-1,p1=-1,d1=0;
+      for(let r=0;r<routes.length;r++){
+        const rt=routes[r],d=durs[r],c0=cost(d);let rb=Infinity,rp=0,rd=0;
+        for(let p=0;p<=rt.length;p++){const nd=insertDur(rt,d,p,x,T,svc);const dc=cost(nd)-c0;if(dc<rb){rb=dc;rp=p;rd=nd;}}
+        if(rb<b1){b2=b1;b1=rb;r1=r;p1=rp;d1=rd;}else if(rb<b2){b2=rb;}
+      }
+      const reg=(b2===Infinity?1e15:b2-b1);
+      if(reg>breg+1e-9||(Math.abs(reg-breg)<=1e-9&&b1<bb1)){breg=reg;bb1=b1;bi=u;br=r1;bp=p1;bd=d1;}
+    }
+    const x=un[bi];routes[br].splice(bp,0,x);durs[br]=bd;un.splice(bi,1);
+  }
+}
+
+function intraOpt(r,T,svc,deadline){
+  let best=r.slice(),bd=routeDur(best,T,svc);const n=best.length;
+  if(n<3)return{r:best,d:bd};
+  let imp=true,guard=0;
+  while(imp&&guard++<500&&Date.now()<deadline){
+    imp=false;
+    for(let i=0;i<n-1&&!imp;i++){for(let j=i+1;j<n;j++){
+      const c=best.slice(0,i).concat(best.slice(i,j+1).reverse(),best.slice(j+1));
+      const d=routeDur(c,T,svc);if(d<bd-1e-6){best=c;bd=d;imp=true;break;}
+    }}
+    for(let L=1;L<=3&&!imp;L++){for(let i=0;i+L<=n&&!imp;i++){
+      const seg=best.slice(i,i+L),rest=best.slice(0,i).concat(best.slice(i+L));
+      for(let p=0;p<=rest.length;p++){
+        if(p===i)continue;
+        const c=rest.slice(0,p).concat(seg,rest.slice(p));const d=routeDur(c,T,svc);
+        if(d<bd-1e-6){best=c;bd=d;imp=true;break;}
+      }
+    }}
+  }
+  return{r:best,d:bd};
+}
+
+function localSearch(routes,durs,T,svc,cost,deadline){
+  const K=routes.length;let any=true,guard=0;
+  while(any&&guard++<100&&Date.now()<deadline){
+    any=false;
+    for(let a=0;a<K;a++){const o=intraOpt(routes[a],T,svc,deadline);if(o.d<durs[a]-1e-6){routes[a]=o.r;durs[a]=o.d;any=true;}}
+    // relocate entre rutas
+    for(let a=0;a<K;a++){for(let i=0;i<routes[a].length;i++){
+      const ra=routes[a],x=ra[i],da=durs[a],dr=removeDur(ra,da,i,T,svc),gain=cost(dr)-cost(da);
+      let best=-1e-6,bb=-1,bp=0,bd=0;
+      for(let b=0;b<K;b++){if(b===a)continue;const rb=routes[b],db=durs[b],cb=cost(db);
+        for(let p=0;p<=rb.length;p++){const nd=insertDur(rb,db,p,x,T,svc);const dl=gain+cost(nd)-cb;if(dl<best){best=dl;bb=b;bp=p;bd=nd;}}}
+      if(bb>=0){ra.splice(i,1);durs[a]=dr;routes[bb].splice(bp,0,x);durs[bb]=bd;any=true;i--;}
+    }}
+    // intercambio entre rutas
+    for(let a=0;a<K;a++){for(let b=a+1;b<K;b++){const ra=routes[a],rb=routes[b];
+      for(let i=0;i<ra.length;i++){for(let j=0;j<rb.length;j++){
+        const x=ra[i],y=rb[j];const na=replaceDur(ra,durs[a],i,y,T,svc),nb=replaceDur(rb,durs[b],j,x,T,svc);
+        const dl=cost(na)+cost(nb)-cost(durs[a])-cost(durs[b]);
+        if(dl<-1e-6){ra[i]=y;rb[j]=x;durs[a]=na;durs[b]=nb;any=true;}
+      }}
+    }}
+    // intercambio de colas (2-opt*)
+    for(let a=0;a<K;a++){for(let b=a+1;b<K;b++){
+      const ra=routes[a],rb=routes[b];const pa=prefixDur(ra,T,svc),pb=prefixDur(rb,T,svc),sa=suffixDur(ra,T,svc),sb=suffixDur(rb,T,svc);
+      const c0=cost(durs[a])+cost(durs[b]);let best=-1e-6,bi=-2,bj=-2,bA=0,bB=0;
+      for(let i=-1;i<ra.length;i++){const xa=i<0?0:ra[i],preA=i<0?0:pa[i];
+        for(let j=-1;j<rb.length;j++){
+          if(i===ra.length-1&&j===rb.length-1)continue;if(i===-1&&j===-1)continue;
+          const xb=j<0?0:rb[j],preB=j<0?0:pb[j];
+          const nA=preA+(j+1<rb.length?T[xa][rb[j+1]]+svc[rb[j+1]]+sb[j+1]:0);
+          const nB=preB+(i+1<ra.length?T[xb][ra[i+1]]+svc[ra[i+1]]+sa[i+1]:0);
+          const dl=cost(nA)+cost(nB)-c0;if(dl<best){best=dl;bi=i;bj=j;bA=nA;bB=nB;}
+        }}
+      if(bi>-2){routes[a]=ra.slice(0,bi+1).concat(rb.slice(bj+1));routes[b]=rb.slice(0,bj+1).concat(ra.slice(bi+1));durs[a]=bA;durs[b]=bB;any=true;}
+    }}
+  }
+}
+
+function solve(T,svc,nodes,K,L,ms,seed){
+  const t0=Date.now(),deadline=t0+ms;const rnd=mulberry32(seed||12345);
+  if(!nodes.length)return{routes:[],durs:[],iters:0};
+  const PEN=40,BAL=4;const cost=function(d){const o=d>L?d-L:0;const r=d/L;return d+PEN*o+20*o*o/L+BAL*L*r*r*r*r*r*r;};
+  K=Math.max(1,Math.min(K,nodes.length));
+  const sym=function(a,b){return(T[a][b]+T[b][a])/2;};
+  const seeds=[],isSeed=new Set(),minD=new Map();
+  for(const x of nodes)minD.set(x,sym(0,x));
+  for(let k=0;k<K;k++){let bx=-1,bv=-1;for(const x of nodes){if(isSeed.has(x))continue;const v=minD.get(x);if(v>bv){bv=v;bx=x;}}
+    seeds.push(bx);isSeed.add(bx);for(const x of nodes){const v=sym(bx,x);if(v<minD.get(x))minD.set(x,v);}}
+  let routes=seeds.map(function(s){return[s];});let durs=routes.map(function(r){return routeDur(r,T,svc);});
+  regretInsert(routes,durs,nodes.filter(function(x){return!isSeed.has(x);}),T,svc,cost);
+  localSearch(routes,durs,T,svc,cost,deadline+ms);
+  const tot=function(D){let s=0;for(const d of D)s+=cost(d);return s;};
+  const mx=function(D){let m=0;for(const d of D)if(d>m)m=d;return m;};
+  const better=function(D,C,bD,bC){const a=mx(D),b=mx(bD);if(a<b-30)return true;if(a>b+30)return false;return C<bC-1e-6;};
+  let cur={routes:routes.map(function(r){return r.slice();}),durs:durs.slice()},curC=tot(durs);
+  let best={routes:cur.routes.map(function(r){return r.slice();}),durs:cur.durs.slice()},bestC=curC,iters=0;
+  while(Date.now()<deadline){
+    iters++;
+    const R=cur.routes.map(function(r){return r.slice();});
+    const removed=new Set();
+    const q=Math.max(2,Math.min(nodes.length-1,Math.round(nodes.length*(0.06+0.14*rnd()))));
+    if(rnd()<0.5){let w=0;for(let k=1;k<R.length;k++)if(routeDur(R[k],T,svc)>routeDur(R[w],T,svc))w=k;
+      const take=Math.min(R[w].length,Math.ceil(q/2));const pool=R[w].slice();
+      for(let t=0;t<take;t++){const i=Math.floor(rnd()*pool.length);removed.add(pool.splice(i,1)[0]);}}
+    const all=[];R.forEach(function(r){r.forEach(function(x){if(!removed.has(x))all.push(x);});});
+    if(all.length){const c=all[Math.floor(rnd()*all.length)];
+      all.sort(function(a,b){return sym(c,a)-sym(c,b);});
+      for(let t=0;t<all.length&&removed.size<q;t++)removed.add(all[t]);}
+    for(let k=0;k<R.length;k++)R[k]=R[k].filter(function(x){return!removed.has(x);});
+    const D=R.map(function(r){return routeDur(r,T,svc);});
+    const rem=Array.from(removed);for(let i=rem.length-1;i>0;i--){const j=Math.floor(rnd()*(i+1));const t=rem[i];rem[i]=rem[j];rem[j]=t;}
+    regretInsert(R,D,rem,T,svc,cost);
+    localSearch(R,D,T,svc,cost,deadline+ms*0.25);
+    const C=tot(D);const frac=Math.min(1,(Date.now()-t0)/ms);
+    if(C<curC*(1+0.01*(1-frac))){cur={routes:R,durs:D};curC=C;}
+    if(better(D,C,best.durs,bestC)){best={routes:R.map(function(r){return r.slice();}),durs:D.slice()};bestC=C;}
+  }
+  best.durs=best.routes.map(function(r){return routeDur(r,T,svc);});
+  best.iters=iters;
+  return best;
+}
+/*CORE-END*/
+
+// ===== Utilidades =====
+const $=id=>document.getElementById(id);
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const store={get(k,d){try{const v=localStorage.getItem('rutasPK.'+k);return v===null?d:JSON.parse(v);}catch(e){return d;}},set(k,v){try{localStorage.setItem('rutasPK.'+k,JSON.stringify(v));}catch(e){}}};
+const COLORS=['#e4572e','#1f77b4','#2ca02c','#9467bd','#d62728','#17becf','#ff7f0e','#8c564b','#e377c2','#7f7f7f','#bcbd22','#0b3c5d','#6a3d9a','#b15928','#1b9e77','#d95f02'];
+const color=i=>COLORS[i%COLORS.length];
+const DEFAULT_DEPOT={lat:19.418200,lng:-99.136900};
+const DEPOT_QUERY='Juan Lucas de Lassaga 54, Obrera, Cuauhtémoc, Ciudad de México';
+const norm=s=>String(s??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');
+const hhmm=d=>d.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',hour12:false});
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function parseNum(v){if(typeof v==='number')return v;const s=String(v??'').trim().replace(/\s/g,'').replace(',', '.');return s===''?NaN:parseFloat(s);}
+function hav(a,b){const R=6371000,toR=Math.PI/180;const dLa=(b.lat-a.lat)*toR,dLo=(b.lng-a.lng)*toR;const x=Math.sin(dLa/2)**2+Math.cos(a.lat*toR)*Math.cos(b.lat*toR)*Math.sin(dLo/2)**2;return 2*R*Math.asin(Math.sqrt(x));}
+function setStatus(t){$('status').textContent=t;}
+function setProg(p){$('prog').style.width=Math.round(Math.max(0,Math.min(1,p))*100)+'%';}
+function isoLocal(d){const p=n=>String(n).padStart(2,'0');const off=-d.getTimezoneOffset();const s=off>=0?'+':'-';const a=Math.abs(off);
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:00${s}${p(Math.floor(a/60))}:${p(a%60)}`;}
+
+// ===== Portal (sesión y API) =====
+const SES={get token(){try{return localStorage.getItem('pp_token');}catch(e){return null;}},get user(){try{return JSON.parse(localStorage.getItem('pp_user'));}catch(e){return null;}}};
+async function api(action,data={}){
+  let r;try{r=await fetch(CONFIG.API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action,token:SES.token,...data})});}
+  catch(e){throw new Error('Sin conexión con el portal');}
+  const j=await r.json().catch(()=>({ok:false,error:'Respuesta inválida del portal ('+r.status+')'}));
+  if(!j.ok)throw new Error(j.error);return j.data;
+}
+
+// ===== Estado =====
+const S={srv:null,headers:[],rows:[],matrix:null,matrixKey:'',result:null,view:'needed',moveDepot:false,factorTouched:false,running:false};
+
+// ===== Worker para no congelar la página =====
+let worker=null;
+function getWorker(){
+  if(worker)return worker;
+  const fns=[mulberry32,routeDur,insertDur,removeDur,replaceDur,prefixDur,suffixDur,regretInsert,intraOpt,localSearch,solve];
+  const src=fns.map(f=>f.toString()).join('\n')+'\nonmessage=function(e){var a=e.data;postMessage(solve(a.T,a.svc,a.nodes,a.K,a.L,a.ms,a.seed));};';
+  worker=new Worker(URL.createObjectURL(new Blob([src],{type:'text/javascript'})));
+  return worker;
+}
+function solveAsync(T,svc,nodes,K,L,ms,seed){
+  return new Promise(res=>{
+    try{const w=getWorker();w.onmessage=e=>res(e.data);w.onerror=()=>{worker=null;res(solve(T,svc,nodes,K,L,ms,seed));};w.postMessage({T,svc,nodes,K,L,ms,seed});}
+    catch(e){res(solve(T,svc,nodes,K,L,ms,seed));}
+  });
+}
+
+// ===== Configuración =====
+function suggestedFactor(hour){
+  const cal=store.get('calib',{});if(cal[hour])return Math.round(cal[hour]*100)/100;
+  if(hour>=7&&hour<10)return 1.8;if(hour>=10&&hour<16)return 1.55;if(hour>=16&&hour<21)return 1.85;return 1.35;
+}
+function refreshFactor(){if(S.factorTouched)return;const h=parseInt(($('tStart').value||'10').split(':')[0]);$('factor').value=suggestedFactor(h);}
+function readCfg(){
+  const date=$('date').value;const start=new Date(`${date}T${$('tStart').value}:00`),end=new Date(`${date}T${$('tEnd').value}:00`);
+  return{date,start,end,K:Math.max(1,parseInt($('drivers').value)||1),wait:Math.max(0,parseFloat($('wait').value)||0),extra:Math.max(0,parseFloat($('extra').value)||0),
+    group:$('group').checked,factor:parseFloat($('factor').value)||1.5,adj:parseFloat($('adj').value)||1,useTT:!!(S.srv&&S.srv.tomtom),ttMode:$('ttMode').value,
+    ms:parseInt($('quality').value)||4000,pw:Math.min(80,Math.max(40,parseFloat($('pw').value)||72)),fs:parseFloat($('fs').value)||1.15,skipDone:$('skipDone').checked,depot:{lat:parseFloat($('dLat').value),lng:parseFloat($('dLng').value)}};
+}
+const PERSIST=['tStart','tEnd','drivers','wait','extra','ttMode','adj','quality','pw','fs'];
+function loadSettings(){
+  PERSIST.forEach(id=>{const v=store.get('f.'+id,null);if(v!==null)$(id).value=v;});
+  ['group','skipDone'].forEach(id=>{const v=store.get('f.'+id,null);if(v!==null)$(id).checked=v;});
+  const d=store.get('depot',DEFAULT_DEPOT);$('dLat').value=d.lat.toFixed(6);$('dLng').value=d.lng.toFixed(6);
+  const t=new Date();$('date').value=`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
+  refreshFactor();
+}
+function bindSettings(){
+  PERSIST.forEach(id=>$(id).addEventListener('change',()=>store.set('f.'+id,$(id).value)));
+  ['group','skipDone'].forEach(id=>$(id).addEventListener('change',()=>store.set('f.'+id,$(id).checked)));
+  $('tStart').addEventListener('change',refreshFactor);
+  $('factor').addEventListener('input',()=>{S.factorTouched=true;});
+  ['dLat','dLng'].forEach(id=>$(id).addEventListener('change',()=>setDepot(parseFloat($('dLat').value),parseFloat($('dLng').value))));
+}
+
+// ===== Mapa =====
+let map,routeLayer,previewLayer,depotMarker,routeLayers=[];
+function initMap(){
+  const d=readCfg().depot;
+  map=L.map('map').setView([d.lat,d.lng],11);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+  previewLayer=L.layerGroup().addTo(map);routeLayer=L.layerGroup().addTo(map);
+  depotMarker=L.marker([d.lat,d.lng],{icon:L.divIcon({className:'depot',html:'<div>C</div>',iconSize:[26,26]}),zIndexOffset:1000}).addTo(map).bindTooltip('Origen: Computenga, Lassaga 54');
+  map.on('click',e=>{if(!S.moveDepot)return;setDepot(e.latlng.lat,e.latlng.lng);S.moveDepot=false;$('moveDepot').textContent='Mover en el mapa';map.getContainer().style.cursor='';});
+}
+function setDepot(lat,lng){
+  if(!isFinite(lat)||!isFinite(lng))return;
+  $('dLat').value=lat.toFixed(6);$('dLng').value=lng.toFixed(6);store.set('depot',{lat,lng});
+  if(depotMarker)depotMarker.setLatLng([lat,lng]);S.matrix=null;
+}
+
+// ===== Excel =====
+const FIELDS=[
+  {id:'m_envio',k:'envio',req:1,exact:['shipment','envio','numerodeenvio','noenvio','guia','tracking','idenvio'],re:/^(shipment|envio|guia|tracking|pedido|folio|paquete)/},
+  {id:'m_dir',k:'dir',req:1,exact:['direccion','domicilio','address','calle'],re:/direccion|domicilio|address|calle/},
+  {id:'m_lat',k:'lat',req:1,exact:['latitud','latitude','lat'],re:/^lat/},
+  {id:'m_lng',k:'lng',req:1,exact:['longitud','longitude','lng','lon','long'],re:/^(lng|lon)/},
+  {id:'m_city',k:'city',exact:['ciudad','municipio','alcaldia','delegacion','city'],re:/^(ciudad|municipio|alcaldia|delegacion)/},
+  {id:'m_cp',k:'cp',exact:['cp','codigopostal','zip','zipcode'],re:/^(cp|codigopostal|zip)/},
+  {id:'m_name',k:'name',exact:['destinatario','cliente','nombre','receptor'],re:/^(destinatario|cliente|nombre|receptor)/},
+  {id:'m_tel',k:'tel',exact:['telefono','tel','celular','phone'],re:/^(telefono|tel|celular|phone)/},
+  {id:'m_estado',k:'estado',exact:['estadoml','status','estatus','estadoenvio'],re:/^(estadoml|estatus|status)$/},
+  {id:'m_tipo',k:'tipo',exact:['shippingmethodtype','tipo','tipoenvio','servicio'],re:/^(shippingmethodtype|tipoenvio)/},
+  {id:'m_espera',k:'espera',exact:['espera','esperamin','tiempoespera','minutosespera'],re:/^(espera|tiempoespera)/}
+];
+function detectCol(h,F){
+  const n=h.map(norm);
+  for(const e of F.exact){const i=n.indexOf(e);if(i>=0)return i;}
+  return n.findIndex(s=>F.re.test(s));
+}
+function fillMapping(force){
+  const saved=force?{}:store.get('mapByName',{});
+  const opts=['<option value="-1">— ninguna —</option>'].concat(S.headers.map((h,i)=>`<option value="${i}">${esc(h||('Columna '+(i+1)))}</option>`)).join('');
+  FIELDS.forEach(F=>{
+    const el=$(F.id);el.innerHTML=opts;
+    let i=saved[F.k]?S.headers.indexOf(saved[F.k]):-1;
+    if(i<0)i=detectCol(S.headers,F);
+    el.value=String(i);
+    el.onchange=()=>{const m=store.get('mapByName',{});const v=parseInt(el.value);m[F.k]=v>=0?S.headers[v]:'';store.set('mapByName',m);S.matrix=null;checkMapping();previewStops();updateFileInfo();};
+  });
+  checkMapping();
+}
+function checkMapping(){
+  const miss=FIELDS.filter(F=>F.req&&parseInt($(F.id).value)<0).map(F=>$(F.id).closest('div').querySelector('label').textContent.replace(' *',''));
+  const w=$('mapWarn');
+  if(miss.length){w.style.display='block';w.innerHTML=`No encontré estas columnas: <b>${esc(miss.join(', '))}</b>. Elígelas abajo; se recordarán para los siguientes archivos.`;$('mapping').style.display='block';}
+  else{w.style.display='none';$('mapping').style.display=store.get('showMap',false)?'block':'none';}
+  FIELDS.forEach(F=>{$(F.id).style.borderColor=F.req&&parseInt($(F.id).value)<0?'var(--bad)':'';});
+  return!miss.length;
+}
+function getMap(){const m={};FIELDS.forEach(F=>m[F.k]=parseInt($(F.id).value));return m;}
+const DONE_STATES=/^(delivered|cancelled|canceled|entregado|cancelado|not_delivered)$/i;
+const cell=(r,i)=>{if(i<0)return'';const v=String(r[i]??'').trim();return v==='-'?'':v;};
+function buildStops(cfg){
+  const m=getMap();if(m.lat<0||m.lng<0)throw new Error('Selecciona las columnas de latitud y longitud.');
+  const bad=[],parcels=[],outside=[],skipped=[],dups=[];const seen=new Set();
+  S.rows.forEach((r,i)=>{
+    const id=cell(r,m.envio)||('Fila '+(i+2));
+    if(cfg.skipDone&&m.estado>=0&&DONE_STATES.test(cell(r,m.estado))){skipped.push(id);return;}
+    if(m.envio>=0&&seen.has(id)){dups.push(id);return;}seen.add(id);
+    let lat=parseNum(r[m.lat]),lng=parseNum(r[m.lng]);
+    if(!isFinite(lat)||!isFinite(lng)||(lat===0&&lng===0)){bad.push(id);return;}
+    if(Math.abs(lat)>60&&Math.abs(lng)<60){const t=lat;lat=lng;lng=t;}
+    if(lat<18.8||lat>20.4||lng<-100||lng>-98.4)outside.push(id);
+    const city=cell(r,m.city),cp=cell(r,m.cp);
+    const dir=[cell(r,m.dir),city,cp?('CP '+cp):''].filter(Boolean).join(', ');
+    const tel=cell(r,m.tel);const telOk=tel&&/\d{6,}/.test(tel.replace(/\D/g,''))?tel:'';
+    const ref=cell(r,m.name);const tipo=cell(r,m.tipo).toLowerCase();
+    const esp=m.espera>=0?parseNum(r[m.espera]):NaN;
+    parcels.push({id,dir,ref,tel:telOk,tipo,lat,lng,esp});
+  });
+  const stops=[],byKey=new Map();
+  for(const p of parcels){
+    const key=cfg.group?p.lat.toFixed(5)+','+p.lng.toFixed(5):Math.random().toString(36);
+    let s=byKey.get(key);
+    if(!s){s={lat:p.lat,lng:p.lng,dir:p.dir,parcels:[]};byKey.set(key,s);stops.push(s);}
+    s.parcels.push(p);if(!s.dir&&p.dir)s.dir=p.dir;
+  }
+  for(const s of stops){
+    const explicit=s.parcels.map(p=>p.esp).filter(v=>isFinite(v)&&v>=0);
+    const base=explicit.length?Math.max(...explicit):cfg.wait;
+    s.svcMin=base+cfg.extra*(s.parcels.length-1);
+  }
+  return{stops,bad,outside,skipped,dups,parcelCount:parcels.length};
+}
+function updateFileInfo(){
+  try{const {stops,bad,skipped,dups,parcelCount}=buildStops(readCfg());
+    $('fileInfo').textContent=`${S.fileName}: ${parcelCount} envíos a rutear en ${stops.length} paradas`+(skipped.length?` · ${skipped.length} entregados/cancelados omitidos`:'')+(dups.length?` · ${dups.length} duplicados omitidos`:'')+(bad.length?` · ${bad.length} sin coordenadas`:'');
+  }catch(e){$('fileInfo').textContent=`${S.fileName}: ${S.rows.length} filas · falta mapear columnas`;}
+}
+function previewStops(){
+  previewLayer.clearLayers();
+  try{const {stops}=buildStops(readCfg());const pts=[];
+    stops.forEach(s=>{L.circleMarker([s.lat,s.lng],{radius:5,color:'#555',weight:1,fillColor:'#888',fillOpacity:.8}).addTo(previewLayer).bindTooltip(s.parcels.map(p=>p.id).join(', '));pts.push([s.lat,s.lng]);});
+    if(pts.length){pts.push([readCfg().depot.lat,readCfg().depot.lng]);map.fitBounds(pts,{padding:[30,30]});}
+  }catch(e){}
+}
+async function onFile(e){
+  const f=e.target.files[0];if(!f)return;
+  try{
+    const wb=XLSX.read(await f.arrayBuffer(),{type:'array'});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    const aoa=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:true});
+    let h=aoa.findIndex(r=>r.filter(c=>String(c).trim()!=='').length>=2);if(h<0)h=0;
+    S.headers=(aoa[h]||[]).map(c=>String(c).trim());
+    S.rows=aoa.slice(h+1).filter(r=>r.some(c=>String(c).trim()!==''));
+    S.matrix=null;S.result=null;
+    S.fileName=f.name;$('mapToggle').style.display='inline';fillMapping(false);updateFileInfo();
+    previewStops();routeLayer.clearLayers();
+  }catch(err){$('fileInfo').textContent='No se pudo leer el archivo: '+err.message;}
+}
+function downloadTemplate(e){
+  e.preventDefault();
+  const ws=XLSX.utils.aoa_to_sheet([['Shipment','Destinatario','Teléfono','Dirección','Ciudad','CP','Latitud','Longitud','Estado ML','Espera'],
+    ['45012345678','Nombre Apellido','5500000000','Av. Insurgentes Sur 1235','Benito Juárez','03100',19.3741,-99.1781,'ready_to_ship',''],
+    ['45012345679','Nombre Apellido','','Calz. de Tlalpan 3000','Coyoacán','04220',19.3301,-99.1412,'ready_to_ship',15]]);
+  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Envios');XLSX.writeFile(wb,'plantilla_rutas.xlsx');
+}
+
+// ===== Matriz de tiempos (OSRM, gratis) =====
+async function getMatrix(pts,onProg){
+  const key=pts.map(p=>p.lat.toFixed(5)+','+p.lng.toFixed(5)).join(';');
+  if(S.matrix&&S.matrixKey===key)return S.matrix;
+  const N=pts.length,dur=[...Array(N)].map(()=>new Array(N).fill(NaN)),dist=[...Array(N)].map(()=>new Array(N).fill(NaN));
+  const B=50,blocks=[];for(let s=0;s<N;s+=B){const b=[];for(let i=s;i<Math.min(N,s+B);i++)b.push(i);blocks.push(b);}
+  const total=blocks.length*blocks.length;let done=0;
+  for(const sb of blocks)for(const db of blocks){
+    const idx=[...new Set([...sb,...db])],pos=new Map(idx.map((v,i)=>[v,i]));
+    const coords=idx.map(i=>pts[i].lng.toFixed(6)+','+pts[i].lat.toFixed(6)).join(';');
+    const url=`https://router.project-osrm.org/table/v1/driving/${coords}?sources=${sb.map(i=>pos.get(i)).join(';')}&destinations=${db.map(i=>pos.get(i)).join(';')}&annotations=duration,distance`;
+    let js=null;
+    for(let at=0;at<3&&!js;at++){
+      try{const r=await fetch(url);if(r.ok){const j=await r.json();if(j.code==='Ok')js=j;}else await sleep(r.status===429?3000:1500);}catch(e){await sleep(1500);}
+    }
+    if(js){sb.forEach((si,a)=>db.forEach((di,b)=>{const v=js.durations?.[a]?.[b];const m=js.distances?.[a]?.[b];if(typeof v==='number')dur[si][di]=v;if(typeof m==='number')dist[si][di]=m;}));}
+    done++;onProg(done/total);if(done<total)await sleep(1050);
+  }
+  let filled=0;
+  for(let i=0;i<N;i++)for(let j=0;j<N;j++){
+    if(i===j){dur[i][j]=0;dist[i][j]=0;continue;}
+    if(!(typeof dur[i][j]==='number'&&isFinite(dur[i][j]))){const d=hav(pts[i],pts[j])*1.35;dur[i][j]=d/(32/3.6);dist[i][j]=d;filled++;}
+    else if(!(typeof dist[i][j]==='number'&&isFinite(dist[i][j])))dist[i][j]=hav(pts[i],pts[j])*1.3;
+  }
+  S.matrix={dur,dist,filledPct:N>1?filled/(N*(N-1)):0};S.matrixKey=key;
+  return S.matrix;
+}
+
+// ===== TomTom (tráfico real) =====
+function ttError(status,j){
+  const msg=j?.detailedError?.message||j?.error?.description||j?.errorText||j?.message||'';
+  if(status===403||status===401)return'TomTom rechazó la key (inválida o restringida a otro dominio). '+msg;
+  if(status===429)return'TomTom: límite de consultas alcanzado. '+msg;
+  return`TomTom respondió ${status}. ${msg}`;
+}
+async function evalTomTom(plan,pts,cfg,onProg){
+  const idx=[];const rutas=[];
+  plan.routes.forEach((r,ri)=>{if(r.length){idx.push(ri);rutas.push({locs:[pts[0],...r.map(x=>pts[x])].map(p=>[p.lat,p.lng])});}});
+  const dep=cfg.start.getTime()>Date.now()+60000?isoLocal(cfg.start):'now';
+  const res=await api('tomtomRutas',{rutas,departAt:dep,mode:cfg.ttMode});
+  const out=plan.routes.map(()=>null);
+  res.rutas.forEach((x,k)=>{if(x.error)throw new Error(x.error);out[idx[k]]=x.legs;});
+  onProg&&onProg(1);
+  return out;
+}
+function calibFactor(plan,ev,M){
+  let tt=0,raw=0;
+  plan.routes.forEach((r,ri)=>{if(!r.length||!ev[ri])return;let p=0;r.forEach((x,k)=>{tt+=ev[ri][k].sec;raw+=M.dur[p][x];p=x;});});
+  return raw>0?tt/raw:null;
+}
+
+// ===== Duraciones reales y horarios =====
+function planDurs(plan,T,svc,cfg){
+  return plan.routes.map((r,ri)=>{
+    if(!r.length)return 0;
+    if(plan.ev&&plan.ev[ri]){let t=0;r.forEach((x,k)=>{t+=plan.ev[ri][k].sec*cfg.adj+svc[x];});return t;}
+    return routeDur(r,T,svc);
+  });
+}
+function buildSchedule(plan,T,svc,M,stops,cfg){
+  const used=plan.routes.map((r,ri)=>({r,ri})).filter(o=>o.r.length);
+  return used.map((o,num)=>{
+    let t=cfg.start.getTime(),p=0,km=0;const out=[];let geom=[[cfg.depot.lat,cfg.depot.lng]];
+    o.r.forEach((x,k)=>{
+      const leg=plan.ev&&plan.ev[o.ri]?plan.ev[o.ri][k]:null;
+      const sec=leg?leg.sec*cfg.adj:T[p][x];const m=leg?leg.m:M.dist[p][x];
+      t+=sec*1000;const eta=new Date(t);t+=svc[x]*1000;km+=m/1000;
+      const st=stops[x-1];out.push({st,eta,leave:new Date(t),svcMin:svc[x]/60,legMin:sec/60,legKm:m/1000});
+      if(leg&&leg.pts.length)geom=geom.concat(leg.pts);else geom.push([st.lat,st.lng]);
+      p=x;
+    });
+    const end=new Date(t);
+    return{num:num+1,total:used.length,color:color(num),stops:out,start:cfg.start,end,deadline:cfg.end,km,
+      parcels:out.reduce((a,s)=>a+s.st.parcels.length,0),slackMin:(cfg.end-end)/60000,geom,traffic:!!(plan.ev&&plan.ev[o.ri])};
+  });
+}
+
+// ===== Proceso principal =====
+async function optimize(){
+  if(S.running)return;
+  const btn=$('run');S.running=true;btn.disabled=true;setProg(0);
+  const warnings=[];
+  try{
+    if(!S.rows.length)throw new Error('Primero sube el Excel con los envíos.');
+    const cfg=readCfg();
+    if(!isFinite(cfg.depot.lat)||!isFinite(cfg.depot.lng))throw new Error('Revisa las coordenadas del origen.');
+    if(!(cfg.end>cfg.start))throw new Error('La hora máxima de término debe ser después de la hora de salida.');
+    if(!checkMapping())throw new Error('Faltan columnas por mapear (marcadas en rojo).');
+    const {stops,bad,outside,skipped,dups,parcelCount}=buildStops(cfg);
+    if(!stops.length)throw new Error('No hay envíos con coordenadas válidas.');
+    if(skipped.length)warnings.push(`${skipped.length} envío(s) entregados o cancelados no se rutearon.`);
+    if(dups.length)warnings.push(`${dups.length} envío(s) repetidos en el archivo se tomaron una sola vez: ${dups.slice(0,8).join(', ')}`);
+    if(bad.length)warnings.push(`${bad.length} envío(s) sin coordenadas válidas quedaron fuera: ${bad.slice(0,12).join(', ')}${bad.length>12?'…':''}`);
+    if(outside.length)warnings.push(`${outside.length} envío(s) con coordenadas fuera de CDMX/Edomex (revísalas): ${outside.slice(0,8).join(', ')}${outside.length>8?'…':''}`);
+    const pts=[cfg.depot,...stops];const n=stops.length;
+    const limit=(cfg.end-cfg.start)/1000;
+    const svc=[0,...stops.map(s=>s.svcMin*60)];
+
+    setStatus(`Calculando tiempos entre ${n} paradas (OSRM)…`);
+    const M=await getMatrix(pts,p=>setProg(p*0.4));
+    if(M.filledPct>0.02)warnings.push(`OSRM no respondió para ${Math.round(M.filledPct*100)}% de los tramos; esos se estimaron en línea recta (menos preciso).`);
+
+    let f=cfg.factor*cfg.adj,trafficSrc=`Estimado sin TomTom: OSRM × factor ${cfg.factor.toFixed(2)}`,ttOk=cfg.useTT,ttCalls=0;
+    const scale=ff=>M.dur.map(row=>row.map(v=>v*ff));
+    let T=scale(f);
+    const reachable=()=>{const a=[],u=[];for(let i=1;i<=n;i++)(T[0][i]+svc[i]>limit?u:a).push(i);return{a,u};};
+    let {a:active}=reachable();
+    const K=Math.min(cfg.K,Math.max(1,active.length));
+
+    setStatus(`Armando ${K} ruta(s)…`);setProg(0.45);
+    let planK=await solveAsync(T,svc,active,K,limit,cfg.ms,7);
+
+    if(ttOk){
+      try{
+        let fCal=null;
+        for(let round=0;;round++){
+          setStatus(`Midiendo tráfico real con TomTom (vuelta ${round+1})…`);
+          planK.ev=await evalTomTom(planK,pts,cfg,p=>setProg(0.5+p*0.15));ttCalls+=planK.routes.filter(r=>r.length).length;
+          fCal=calibFactor(planK,planK.ev,M);if(!fCal)break;
+          const fNew=fCal*cfg.adj;const changed=Math.abs(fNew-f)/f>0.06;
+          f=fNew;T=scale(f);
+          if(!changed||round>=2)break;
+          ({a:active}=reachable());
+          setStatus('Reoptimizando con el tráfico medido…');
+          planK=await solveAsync(T,svc,active,Math.min(K,Math.max(1,active.length)),limit,cfg.ms,11+round);
+        }
+        if(fCal){const h=cfg.start.getHours();const cal=store.get('calib',{});cal[h]=cal[h]?cal[h]*0.5+fCal*0.5:fCal;store.set('calib',cal);
+          trafficSrc=`TomTom (tráfico ${cfg.start.getTime()>Date.now()+60000?'previsto para la hora de salida':'en tiempo real'}) · factor medido ×${fCal.toFixed(2)}`;
+          if(!S.factorTouched)$('factor').value=(Math.round(fCal*100)/100);}
+      }catch(err){ttOk=false;planK.ev=null;warnings.push(err.message+' Se continuó con el factor estimado.');}
+    }
+    const {u:unreach}=reachable();
+    const unreachStops=unreach.map(i=>stops[i-1]);
+    active=active.filter(i=>!unreach.includes(i));
+
+    const dK=planDurs(planK,T,svc,cfg);const maxK=Math.max(0,...dK);
+    const feasibleK=maxK<=limit+1;
+    let planN=null,N=K;
+
+    if(!feasibleK){
+      const sumK=dK.reduce((a,b)=>a+b,0);
+      let k=Math.max(K+1,Math.ceil(sumK/limit));
+      while(k<=active.length){
+        setStatus(`No alcanza con ${K}. Probando con ${k} repartidores…`);setProg(0.7);
+        const p=await solveAsync(T,svc,active,k,limit,Math.max(1200,cfg.ms*0.6),100+k);
+        let d=planDurs(p,T,svc,cfg);
+        if(Math.max(...d)<=limit+1){
+          if(ttOk){try{setStatus(`Validando ${k} rutas con TomTom…`);p.ev=await evalTomTom(p,pts,cfg,null);ttCalls+=k;d=planDurs(p,T,svc,cfg);}catch(err){ttOk=false;p.ev=null;warnings.push(err.message);}}
+          if(Math.max(...d)<=limit+1){planN=p;N=k;break;}
+        }
+        k++;
+      }
+      if(planN&&N>K+1){
+        for(let k2=N-1;k2>K;k2--){
+          setStatus(`Verificando si bastan ${k2}…`);
+          const p=await solveAsync(T,svc,active,k2,limit,Math.max(1200,cfg.ms*0.6),300+k2);
+          let d=planDurs(p,T,svc,cfg);if(Math.max(...d)>limit+1)break;
+          if(ttOk){try{p.ev=await evalTomTom(p,pts,cfg,null);ttCalls+=k2;d=planDurs(p,T,svc,cfg);}catch(err){break;}}
+          if(Math.max(...d)>limit+1)break;planN=p;N=k2;
+        }
+      }
+      if(!planN){N=active.length;}
+    }
+
+    let fewer=null;
+    if(false){
+      const sumK=dK.reduce((a,b)=>a+b,0);
+      for(let k=K-1;k>=Math.max(1,Math.ceil(sumK/limit))&&K-k<=4;k--){
+        setStatus(`Revisando si alcanzan ${k} repartidores…`);
+        const p=await solveAsync(T,svc,active,k,limit,Math.max(800,cfg.ms*0.35),500+k);
+        const d=planDurs(p,T,svc,cfg);if(Math.max(...d)<=limit*0.95)fewer=k;else break;
+      }
+    }
+
+    const schedK=buildSchedule(planK,T,svc,M,stops,cfg);
+    const schedN=planN?buildSchedule(planN,T,svc,M,stops,cfg):null;
+    S.result={cfg,K,N,feasibleK,planK:{sched:schedK},planN:schedN?{sched:schedN}:null,maxK,limit,unreachStops,warnings,trafficSrc,fewer,parcelCount,nStops:n,ttCalls,noPlanN:!feasibleK&&!planN};
+    S.view=schedN?'needed':'given';
+    renderResult();setStatus(`Listo · ${hhmm(new Date())}`+(ttCalls?` · ${ttCalls} consultas TomTom`:''));setProg(1);
+  }catch(err){
+    setStatus('');setProg(0);
+    $('results').innerHTML=`<div class="alert bad">${esc(err.message)}</div>`+warnings.map(w=>`<div class="alert warn">${esc(w)}</div>`).join('');
+  }finally{S.running=false;btn.disabled=false;}
+}
+
+// ===== Resultados =====
+function currentSched(){const R=S.result;return(S.view==='needed'&&R.planN?R.planN:R.planK).sched;}
+function renderResult(){
+  const R=S.result;if(!R)return;const sched=currentSched();const cfg=R.cfg;
+  let h='';
+  if(!R.feasibleK){
+    const late=Math.round((R.maxK-R.limit)/60);
+    if(R.planN){
+      h+=`<div class="alert bad"><span class="big">Faltan ${R.N-R.K} repartidor${R.N-R.K>1?'es':''}</span>Con ${R.K} no terminas antes de las ${hhmm(cfg.end)}: la mejor distribución acaba a las ${hhmm(new Date(cfg.start.getTime()+R.maxK*1000))} (${late} min tarde). Necesitas <b>${R.N} repartidores</b>; abajo están las ${R.N} rutas que sí terminan a tiempo.</div>`;
+    }else{
+      h+=`<div class="alert bad"><span class="big">No es posible terminar a tiempo</span>Ni con un repartidor por parada se termina antes de las ${hhmm(cfg.end)}. Amplía el horario o reduce la espera por parada.</div>`;
+    }
+    if(R.planN)h+=`<div class="toggle"><button data-v="needed" class="${S.view==='needed'?'on':''}">Plan a tiempo (${R.N} rutas)</button><button data-v="given" class="${S.view==='given'?'on':''}">Con ${R.K} disponibles (no alcanza)</button></div>`;
+  }else{
+    h+=`<div class="alert ok"><span class="big">Todas las rutas terminan a tiempo</span>${R.K} repartidor${R.K>1?'es':''} · el último termina a las ${hhmm(new Date(Math.max(...sched.map(s=>s.end.getTime()))))} (límite ${hhmm(cfg.end)}).</div>`;
+    if(R.fewer)h+=`<div class="alert info">Con <b>${R.fewer} repartidor${R.fewer>1?'es':''}</b> probablemente también alcanza (con 5% de margen). <button id="useFewer">Usar ${R.fewer}</button></div>`;
+  }
+  if(R.unreachStops.length)h+=`<div class="alert bad"><b>${R.unreachStops.length} parada(s) imposibles</b> en ese horario (solo el traslado desde Lassaga ya rebasa la hora límite): ${esc(R.unreachStops.map(s=>s.parcels.map(p=>p.id).join('/')).join(', '))}</div>`;
+  R.warnings.forEach(w=>{h+=`<div class="alert warn">${esc(w)}</div>`;});
+  const tp=sched.reduce((a,s)=>a+s.parcels,0),ts=sched.reduce((a,s)=>a+s.stops.length,0);
+  h+=`<div class="chips">
+    <div class="chip"><small>Rutas</small><strong>${sched.length}</strong></div>
+    <div class="chip"><small>Paradas / envíos</small><strong>${ts} / ${tp}</strong></div>
+    <div class="chip"><small>Termina la última</small><strong>${sched.length?hhmm(new Date(Math.max(...sched.map(s=>s.end.getTime())))):'—'}</strong></div>
+    <div class="chip"><small>Km totales</small><strong>${Math.round(sched.reduce((a,s)=>a+s.km,0))}</strong></div>
+  </div>
+  <div class="hint" style="margin-bottom:8px">Tiempos: ${esc(R.trafficSrc)}</div>
+  <div class="btns" style="margin-bottom:10px"><button id="pubBtn" style="background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600">Publicar en la super app</button><button id="printAll">Imprimir tickets (todas)</button><button id="pdfAll">PDF 80 mm (todas)</button><button id="xlsOut">Excel de rutas</button></div>
+  <div class="tblwrap"><table class="tbl"><thead><tr><th>Ruta</th><th>Paradas</th><th>Envíos</th><th>Km</th><th>Salida</th><th>Termina</th><th>Holgura</th><th>Estado</th><th>Repartidor</th><th></th></tr></thead><tbody>`;
+  sched.forEach((s,i)=>{const ok=s.slackMin>=-0.5;
+    h+=`<tr data-i="${i}"><td><span class="dot" style="background:${s.color}"></span>Ruta ${s.num}</td><td>${s.stops.length}</td><td>${s.parcels}</td><td>${s.km.toFixed(1)}</td><td>${hhmm(s.start)}</td><td>${hhmm(s.end)}</td><td>${Math.round(s.slackMin)} min</td><td class="${ok?'st-ok':'st-bad'}">${ok?'A tiempo':'Tarde'}</td><td><select class="emp" data-emp="${i}" style="min-width:170px;padding:5px">${empOptions()}</select></td><td style="display:flex;gap:4px"><button data-print="${i}">Imprimir</button><button data-pdf="${i}">PDF</button><button data-wa="${i}" style="background:#25D366;border-color:#25D366;color:#fff">WhatsApp</button><button data-copy="${i}">Copiar</button></td></tr>`;});
+  h+=`</tbody></table></div>`;
+  sched.forEach((s,i)=>{
+    h+=`<details class="route" id="det${i}"><summary><span class="dot" style="background:${s.color}"></span>Ruta ${s.num} · ${s.stops.length} paradas · ${hhmm(s.start)} → ${hhmm(s.end)}</summary><ol>`;
+    s.stops.forEach(o=>{h+=`<li><b>${hhmm(o.eta)}</b> · ${esc(o.st.parcels.map(p=>p.id).join(', '))}<br><span>${esc(o.st.dir||(o.st.lat.toFixed(5)+', '+o.st.lng.toFixed(5)))} · espera ${Math.round(o.svcMin)} min</span></li>`;});
+    h+=`</ol></details>`;
+  });
+  $('results').innerHTML=h;
+  $('results').querySelectorAll('.toggle button').forEach(b=>b.onclick=()=>{S.view=b.dataset.v;renderResult();});
+  $('results').querySelectorAll('button[data-pdf]').forEach(b=>b.onclick=e=>{e.stopPropagation();exportPDF([+b.dataset.pdf]);});
+  $('results').querySelectorAll('tr[data-i]').forEach(tr=>tr.onclick=()=>highlight(+tr.dataset.i));
+  $('pdfAll').onclick=()=>exportPDF(sched.map((_,i)=>i));
+  $('printAll').onclick=()=>printTickets(sched.map((_,i)=>i));
+  $('results').querySelectorAll('button[data-print]').forEach(b=>b.onclick=e=>{e.stopPropagation();printTickets([+b.dataset.print]);});
+  $('results').querySelectorAll('button[data-wa]').forEach(b=>b.onclick=e=>{e.stopPropagation();shareWA(+b.dataset.wa);});
+  $('results').querySelectorAll('button[data-copy]').forEach(b=>b.onclick=async e=>{e.stopPropagation();try{await navigator.clipboard.writeText(routeText(sched[+b.dataset.copy]));b.textContent='Copiado';setTimeout(()=>b.textContent='Copiar',1500);}catch(_){prompt('Copia el texto:',routeText(sched[+b.dataset.copy]));}});
+  const asig=asignaciones();
+  $('results').querySelectorAll('select[data-emp]').forEach(sel=>{const num=sched[+sel.dataset.emp].num;sel.value=asig[num]||'';sel.onclick=e=>e.stopPropagation();
+    sel.onchange=()=>{const a=asignaciones();if(sel.value&&Object.keys(a).some(k=>+k!==num&&a[k]===sel.value)){alert('Ese repartidor ya tiene otra ruta.');sel.value=a[num]||'';return;}a[num]=sel.value;store.set('asig.'+S.result.cfg.date,a);};});
+  $('pubBtn').onclick=publicar;
+  $('xlsOut').onclick=exportXLSX;
+  const uf=$('useFewer');if(uf)uf.onclick=()=>{$('drivers').value=R.fewer;store.set('f.drivers',String(R.fewer));optimize();};
+  drawRoutes(sched);
+}
+function drawRoutes(sched){
+  routeLayer.clearLayers();previewLayer.clearLayers();routeLayers=[];const all=[];
+  sched.forEach(s=>{
+    const g=L.layerGroup();
+    L.polyline(s.geom,{color:s.color,weight:4,opacity:.8}).addTo(g);
+    s.stops.forEach((o,k)=>{
+      L.marker([o.st.lat,o.st.lng],{icon:L.divIcon({className:'pin',html:`<div style="background:${s.color}">${k+1}</div>`,iconSize:[22,22]})})
+        .bindPopup(`<b>Ruta ${s.num} · parada ${k+1}</b><br>${hhmm(o.eta)} · ${esc(o.st.parcels.map(p=>p.id).join(', '))}<br>${esc(o.st.dir)}`).addTo(g);
+      all.push([o.st.lat,o.st.lng]);
+    });
+    g.addTo(routeLayer);routeLayers.push(g);
+  });
+  const d=readCfg().depot;all.push([d.lat,d.lng]);
+  if(all.length>1)map.fitBounds(all,{padding:[30,30]});
+}
+function highlight(i){
+  document.querySelectorAll('tr[data-i]').forEach(tr=>tr.classList.toggle('sel',+tr.dataset.i===i));
+  routeLayers.forEach((g,k)=>g.eachLayer(l=>{if(l.setStyle)l.setStyle({opacity:k===i?0.95:0.15});else if(l.setOpacity)l.setOpacity(k===i?1:0.25);}));
+  const s=currentSched()[i];map.fitBounds(s.stops.map(o=>[o.st.lat,o.st.lng]).concat([[readCfg().depot.lat,readCfg().depot.lng]]),{padding:[30,30]});
+  const det=$('det'+i);if(det)det.open=true;
+}
+
+// ===== Exportar =====
+const pdfSafe=s=>String(s??'').normalize('NFC').replace(/[^\x20-\x7E\xA0-\xFF]/g,'');
+function stopInfo(o,i,R){
+  const ps=o.st.parcels;
+  return{n:i+1,eta:hhmm(o.eta),same:ps.some(p=>p.tipo==='same_day'),ids:ps.map(p=>p.id),nombres:[...new Set(ps.map(p=>p.ref).filter(Boolean))].join(' | '),
+    tels:[...new Set(ps.map(p=>p.tel).filter(Boolean))].join(' / '),dir:o.st.dir||`${o.st.lat.toFixed(5)}, ${o.st.lng.toFixed(5)}`,
+    tramo:`${Math.round(o.legMin)} min${o.legKm!=null?' · '+o.legKm.toFixed(1)+' km':''} desde ${i?'la parada '+i:'Lassaga 54'}`,espera:Math.round(o.svcMin)};
+}
+function drawTicket(doc,R,cfg,draw){
+  const W=80,CW=cfg.pw,M=(W-CW)/2,k=cfg.fs,lh=fs=>fs*0.3528*1.2;let y=3;
+  const T=(s,x,yy,o)=>{if(draw)doc.text(pdfSafe(s),x,yy,o);};
+  const rule=(yy,w)=>{if(!draw)return;doc.setLineWidth(w||0.35);doc.setDrawColor(0);doc.line(M,yy,M+CW,yy);};
+  const F=(st,sz)=>{doc.setFont('helvetica',st);doc.setFontSize(sz*k);return sz*k;};
+  const P=(txt,st,sz,gap)=>{const z=F(st,sz);doc.splitTextToSize(pdfSafe(txt),CW).forEach(l=>{y+=lh(z);T(l,M,y);});if(gap)y+=gap;};
+  let z=F('bold',15);y+=lh(z);T('PACKATELAS',W/2,y,{align:'center'});
+  z=F('bold',13);y+=lh(z)+0.5;T(`RUTA ${R.num} de ${R.total}`,W/2,y,{align:'center'});
+  y+=1.5;
+  const d=cfg.start.toLocaleDateString('es-MX',{weekday:'short',day:'2-digit',month:'short',year:'numeric'});
+  P(`Repartidor: ${R.repartidor||'____________________'}`,'bold',10.5,0.5);
+  P(`Fecha: ${d}`,'bold',9);P(`Salida: ${hhmm(R.start)} de Lassaga 54`,'bold',9);
+  P(`Paradas: ${R.stops.length}  Envíos: ${R.parcels}  ${R.km.toFixed(1)} km`,'bold',9);
+  const same=R.stops.filter(o=>o.st.parcels.some(p=>p.tipo==='same_day')).length;if(same)P(`Mismo día: ${same} parada(s)`,'bold',9);
+  P(`Termina aprox: ${hhmm(R.end)}  (límite ${hhmm(R.deadline)})`,'bold',11,1);
+  y+=1.5;rule(y,0.6);y+=0.5;
+  R.stops.forEach((o,i)=>{
+    const s=stopInfo(o,i,R);y+=0.5;
+    z=F('bold',15);y+=lh(z);T(String(s.n),M,y);F('bold',11);T(`~${s.eta}`,M+(s.n>=10?11:8)*k,y);
+    if(s.same){F('bold',9);T('MISMO DIA',M+CW,y,{align:'right'});}
+    P((s.ids.length>1?`Envíos (${s.ids.length}): `:'Envío: ')+s.ids.join(', '),'bold',9.5);
+    if(s.nombres)P(s.nombres,'bold',9.5);
+    if(s.tels)P('Tel: '+s.tels,'normal',9.5);
+    P(s.dir,'normal',9.5);
+    P(s.tramo+` · espera ${s.espera} min`,'normal',8.5);
+    P('Entregado [  ]   Hora: ______','bold',9,1.5);
+    rule(y);y+=0.5;
+  });
+  P(`Fin estimado: ${hhmm(R.end)}`,'bold',11,4);
+  P('Firma: ____________________','bold',9);
+  P(`Generado ${new Date().toLocaleString('es-MX',{hour12:false})}`,'normal',8);
+  return y+8;
+}
+function exportPDF(idxs){
+  const {jsPDF}=window.jspdf;const R=S.result;const sched=currentSched();const list=idxs.map(i=>conRepartidor(sched[i]));
+  const meas=new jsPDF({unit:'mm',format:[80,1000]});
+  const pc=printCfg();const hs=list.map(r=>Math.max(90,Math.ceil(drawTicket(meas,r,pc,false))));
+  const doc=new jsPDF({unit:'mm',format:[80,hs[0]],orientation:'portrait'});
+  list.forEach((r,i)=>{if(i>0)doc.addPage([80,hs[i]],'portrait');drawTicket(doc,r,pc,true);});
+  doc.save(list.length===1?`ruta_${list[0].num}_${R.cfg.date}.pdf`:`rutas_${R.cfg.date}.pdf`);
+}
+const mapsURL=st=>`https://www.google.com/maps/dir/?api=1&destination=${st.lat.toFixed(6)},${st.lng.toFixed(6)}`;
+function ticketHTML(R,cfg){
+  const k=cfg.fs,px=v=>(v*k).toFixed(1)+'pt';
+  const d=cfg.start.toLocaleDateString('es-MX',{weekday:'short',day:'2-digit',month:'short',year:'numeric'});
+  const same=R.stops.filter(o=>o.st.parcels.some(p=>p.tipo==='same_day')).length;
+  let h=`<section class="t"><div class="c b" style="font-size:${px(16)}">PACKATELAS</div><div class="c b" style="font-size:${px(14)}">RUTA ${R.num} de ${R.total}</div>
+  <div class="b" style="font-size:${px(11)};margin-top:4px">Repartidor: ${esc(R.repartidor||'____________________')}</div>
+  <div class="b">Fecha: ${esc(d)}<br>Salida: ${hhmm(R.start)} de Lassaga 54<br>Paradas: ${R.stops.length} · Envíos: ${R.parcels} · ${R.km.toFixed(1)} km${same?`<br>Mismo día: ${same} parada(s)`:''}</div>
+  <div class="b" style="font-size:${px(12)};margin-top:3px">Termina aprox: ${hhmm(R.end)} <span style="font-size:${px(9)}">(límite ${hhmm(R.deadline)})</span></div><hr class="thick">`;
+  R.stops.forEach((o,i)=>{
+    const s=stopInfo(o,i,R);
+    h+=`<div class="s"><div class="row"><span><span class="b" style="font-size:${px(16)}">${s.n}</span> <span class="b" style="font-size:${px(12)}">~${s.eta}</span></span>${s.same?`<span class="tag">MISMO DÍA</span>`:''}</div>
+      <div class="b">${s.ids.length>1?`Envíos (${s.ids.length}): `:'Envío: '}${esc(s.ids.join(', '))}</div>
+      ${s.nombres?`<div class="b">${esc(s.nombres)}</div>`:''}${s.tels?`<div>Tel: ${esc(s.tels)}</div>`:''}
+      <div>${esc(s.dir)}</div>
+      <div style="font-size:${px(8.5)}">${esc(s.tramo)} · espera ${s.espera} min</div>
+      <div class="b" style="margin-top:3px">Entregado ☐ &nbsp; Hora: ______</div></div><hr>`;
+  });
+  h+=`<div class="b" style="font-size:${px(12)};margin-top:4px">Fin estimado: ${hhmm(R.end)}</div><div class="b" style="margin-top:14px">Firma: ____________________</div>
+  <div style="font-size:${px(8)};margin-top:4px">Generado ${new Date().toLocaleString('es-MX',{hour12:false})}</div><div style="height:12mm"></div></section>`;
+  return h;
+}
+function printCfg(){const c=readCfg();return Object.assign({},S.result.cfg,{pw:c.pw,fs:c.fs});}
+function printTickets(idxs){
+  const R=S.result,cfg=printCfg(),sched=currentSched();
+  const css=`@page{size:80mm auto;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff}
+  body{width:${cfg.pw}mm;margin-left:${((80-cfg.pw)/2).toFixed(1)}mm;font-family:Arial,Helvetica,sans-serif;font-size:${(9.5*cfg.fs).toFixed(1)}pt;line-height:1.25;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .t{width:100%;page-break-after:always;break-after:page;padding-top:2mm}.t:last-child{page-break-after:auto;break-after:auto}
+  .c{text-align:center}.b{font-weight:700}hr{border:0;border-top:1px solid #000;margin:4px 0}hr.thick{border-top:2px solid #000}
+  .s{padding:2px 0;word-wrap:break-word;overflow-wrap:anywhere}.row{display:flex;justify-content:space-between;align-items:baseline}.tag{border:1.5px solid #000;padding:0 3px;font-weight:700;font-size:8pt}`;
+  const html=`<!doctype html><html><head><meta charset="utf-8"><title>Tickets</title><style>${css}</style></head><body>${idxs.map(i=>ticketHTML(conRepartidor(sched[i]),cfg)).join('')}</body></html>`;
+  const old=document.getElementById('printFrame');if(old)old.remove();
+  const fr=document.createElement('iframe');fr.id='printFrame';fr.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+  document.body.appendChild(fr);const dc=fr.contentWindow.document;dc.open();dc.write(html);dc.close();
+  const go=()=>{fr.contentWindow.focus();fr.contentWindow.print();};
+  const imgs=[...dc.images];Promise.all(imgs.map(im=>im.complete?1:new Promise(r=>{im.onload=im.onerror=r;}))).then(()=>setTimeout(go,150));
+}
+function routeText(R){
+  const e=empleadoDe(R.num);
+  let t=`*PACKATELAS · Ruta ${R.num} de ${R.total}*${e?' · '+e.nombre:''}\n${R.start.toLocaleDateString('es-MX',{weekday:'long',day:'2-digit',month:'short'})}\nSalida ${hhmm(R.start)} desde Lassaga 54 · termina aprox ${hhmm(R.end)}\n${R.stops.length} paradas · ${R.parcels} envíos · ${R.km.toFixed(1)} km\n`;
+  R.stops.forEach((o,i)=>{
+    const s=stopInfo(o,i,R);
+    t+=`\n*${s.n}. ~${s.eta}*${s.same?' · MISMO DÍA':''} · ${s.ids.join(', ')}\n${s.nombres?s.nombres+'\n':''}${s.tels?'Tel '+s.tels+'\n':''}${s.dir}\n${mapsURL(o.st)}\n`;
+  });
+  return t;
+}
+function shareWA(i){
+  const R=currentSched()[i];const txt=encodeURIComponent(routeText(R));
+  const e=empleadoDe(R.num);let tel=String(e?.telefono||'').replace(/\D/g,'');if(tel.length===10)tel='52'+tel;
+  const url=tel?`https://web.whatsapp.com/send?phone=${tel}&text=${txt}`:`https://web.whatsapp.com/send?text=${txt}`;
+  window.open(url,'whatsapp');
+}
+function asignaciones(){return S.result?store.get('asig.'+S.result.cfg.date,{}):{};}
+function empleadoDe(num){const no=asignaciones()[num];return no&&S.srv?S.srv.empleados.find(e=>e.no_empleado===no):null;}
+function conRepartidor(R){const e=empleadoDe(R.num);return Object.assign({},R,{repartidor:e?e.nombre:''});}
+function empOptions(){
+  if(!S.srv)return'<option value="">(sin sesión)</option>';
+  const rep=S.srv.empleados.filter(e=>e.repartidor),otros=S.srv.empleados.filter(e=>!e.repartidor);
+  const o=e=>`<option value="${esc(e.no_empleado)}">${esc(e.nombre)}</option>`;
+  return '<option value="">— Elegir —</option>'+(rep.length?`<optgroup label="Repartidores">${rep.map(o).join('')}</optgroup>`:'')+(otros.length?`<optgroup label="Otros">${otros.map(o).join('')}</optgroup>`:'');
+}
+function simplificar(pts,n){if(pts.length<=n)return pts;const st=Math.ceil(pts.length/n),out=[];for(let i=0;i<pts.length;i+=st)out.push(pts[i]);out.push(pts[pts.length-1]);return out;}
+async function publicar(){
+  const R=S.result;const sched=currentSched();const asig=asignaciones();
+  const rutas=sched.filter(s=>asig[s.num]).map(s=>({no_empleado:asig[s.num],num:s.num,total:s.total,salida:hhmm(s.start),fin:hhmm(s.end),km:+s.km.toFixed(1),color:s.color,
+    deposito:[R.cfg.depot.lat,R.cfg.depot.lng],geom:simplificar(s.geom.map(p=>[+(+p[0]).toFixed(5),+(+p[1]).toFixed(5)]),900),
+    paradas:s.stops.map((o,i)=>{const x=stopInfo(o,i,s);return{orden:i+1,eta:x.eta,envios:x.ids,ref:x.nombres,tel:x.tels.split(' / ')[0]||'',dir:x.dir,lat:o.st.lat,lng:o.st.lng,espera:x.espera,tipo:x.same?'same_day':''};})}));
+  if(!rutas.length)return alert('Elige el repartidor de cada ruta en la columna "Repartidor".');
+  const faltan=sched.length-rutas.length;
+  if(!confirm(`Publicar ${rutas.length} ruta(s) del ${R.cfg.date}${faltan?` (${faltan} sin repartidor no se publican)`:''}? Reemplaza lo que ya se haya publicado para ese día y les llega una notificación.`))return;
+  const b=$('pubBtn');b.disabled=true;b.textContent='Publicando…';
+  try{const r=await api('publicarRutas',{fecha:R.cfg.date,rutas});alert(`Listo: ${r.publicadas} ruta(s) publicadas · ${r.con_push} con notificación push. Ya la ven en "Mi ruta".`);}
+  catch(e){alert('No se pudo publicar: '+e.message);}
+  finally{b.disabled=false;b.textContent='Publicar en la super app';}
+}
+function exportXLSX(){
+  const R=S.result;const sched=currentSched();const rows=[];
+  sched.forEach(s=>s.stops.forEach((o,k)=>o.st.parcels.forEach(p=>rows.push({Ruta:s.num,Repartidor:empleadoDe(s.num)?.nombre||'',Orden:k+1,Envio:p.id,Direccion:p.dir,Referencia:p.ref,Latitud:p.lat,Longitud:p.lng,Llegada:hhmm(o.eta),Sale:hhmm(o.leave),Espera_min:Math.round(o.svcMin)}))));
+  const res=sched.map(s=>({Ruta:s.num,Paradas:s.stops.length,Envios:s.parcels,Km:+s.km.toFixed(1),Salida:hhmm(s.start),Termina:hhmm(s.end),Holgura_min:Math.round(s.slackMin)}));
+  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'Paradas');XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(res),'Resumen');
+  XLSX.writeFile(wb,`rutas_${R.cfg.date}.xlsx`);
+}
+
+// ===== Origen =====
+async function geocodeDepot(){
+  setStatus('Buscando Lassaga 54…');
+  try{const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=mx&q=${encodeURIComponent(DEPOT_QUERY)}`);const j=await r.json();
+    if(j&&j[0]){setDepot(parseFloat(j[0].lat),parseFloat(j[0].lon));map.setView([+j[0].lat,+j[0].lon],17);setStatus('Origen ubicado. Si no está exacto, usa “Mover en el mapa”.');}
+    else setStatus('No se encontró; usa “Mover en el mapa”.');}
+  catch(e){setStatus('No se pudo buscar; usa “Mover en el mapa”.');}
+}
+
+// ===== Claves del servidor =====
+function pintarClaves(){
+  const c=S.srv;if(!c)return;
+  $('keysState').innerHTML=`TomTom: <b style="color:${c.tomtom?'var(--ok)':'var(--warn)'}">${c.tomtom?'configurado ✓':'sin key (se usa el factor)'}</b><br>Shipday: <b style="color:${c.shipday?'var(--ok)':'var(--warn)'}">${c.shipday?'configurado ✓':'sin key (no hay reporte)'}</b>`;
+}
+async function cargarServidor(){
+  const u=SES.user;
+  if(!SES.token||!u||u.rol!=='admin'){
+    $('gate').style.display='block';$('gate').innerHTML='Para usar el ruteador entra primero al <a href="./">portal</a> con tu RFC y PIN de patrón; luego regresa a esta página.';
+    $('keysState').textContent='Sin sesión del portal.';$('run').disabled=true;return;
+  }
+  $('who').textContent='Patrón: '+u.nombre;
+  try{S.srv=await api('rutasConfig');pintarClaves();}
+  catch(e){$('gate').style.display='block';$('gate').textContent='No se pudo conectar con el portal: '+e.message;$('keysState').textContent='';}
+}
+$('keysEdit').onclick=()=>{$('keysBox').style.display=$('keysBox').style.display==='block'?'none':'block';};
+$('keysSave').onclick=async()=>{
+  const tomtom=$('kTomtom').value.trim(),shipday=$('kShipday').value.trim();
+  if(!tomtom&&!shipday)return alert('Pega al menos una key.');
+  const b=$('keysSave');b.disabled=true;b.textContent='Probando y guardando…';
+  try{const r=await api('guardarClaves',{tomtom,shipday});Object.assign(S.srv,r);pintarClaves();$('kTomtom').value='';$('kShipday').value='';$('keysBox').style.display='none';alert('Claves guardadas en el servidor.');}
+  catch(e){alert(e.message);}finally{b.disabled=false;b.textContent='Guardar en el servidor';}
+};
+
+// ===== Inicio =====
+loadSettings();bindSettings();initMap();cargarServidor();
+window.__ruteador={S,ticketHTML,conRepartidor,currentSched,printCfg,routeText};
+$('file').addEventListener('change',onFile);
+$('tpl').addEventListener('click',downloadTemplate);
+$('run').addEventListener('click',optimize);
+$('group').addEventListener('change',()=>{S.matrix=null;previewStops();updateFileInfo();});
+$('skipDone').addEventListener('change',()=>{S.matrix=null;previewStops();updateFileInfo();});
+$('mapReset').addEventListener('click',()=>{store.set('mapByName',{});fillMapping(true);S.matrix=null;previewStops();updateFileInfo();});
+$('mapToggle').addEventListener('click',e=>{e.preventDefault();const on=$('mapping').style.display!=='block';$('mapping').style.display=on?'block':'none';store.set('showMap',on);});
+$('geoDepot').addEventListener('click',geocodeDepot);
+$('moveDepot').addEventListener('click',()=>{S.moveDepot=!S.moveDepot;$('moveDepot').textContent=S.moveDepot?'Haz clic en el mapa…':'Mover en el mapa';map.getContainer().style.cursor=S.moveDepot?'crosshair':'';});
+</script>
+</body>
+</html>

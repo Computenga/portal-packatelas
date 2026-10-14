@@ -74,3 +74,12 @@ Cada vez que cambie `Code.gs`: *Implementar* → *Administrar implementaciones* 
 node test/backend.test.js     # backend con hojas simuladas (17 escenarios)
 node test/ui.test.js carpeta  # recorre la app en modo demo y toma capturas
 ```
+
+## Rutas (ruteador, Mi ruta y reporte Shipday)
+
+- **Ruteador:** `https://computenga.github.io/portal-packatelas/ruteador.html` (o Portal → Más → Rutas y reporte → Ruteador). Usa la sesión del portal: hay que entrar antes como patrón.
+- **Claves:** las keys de TomTom (Routing API) y Shipday se guardan desde el ruteador → *Claves del servidor*. Se prueban y quedan en las *propiedades del script* de Apps Script; nunca llegan al navegador. TomTom se consulta a través del portal (acción `tomtomRutas`).
+- **Publicar:** en el ruteador eliges el repartidor de cada ruta y tocas *Publicar en la super app*. Se guarda en la pestaña *Rutas* (una fila por ruta, con paradas y la línea del recorrido en `datos_json`) y al repartidor le llega una notificación. Volver a publicar el mismo día reemplaza lo anterior.
+- **Mi ruta (repartidor):** tarjeta en Inicio y en Más → Mi ruta: mapa con círculos numerados y la línea del recorrido, y la lista de paradas con botones para navegar con Google Maps o Waze.
+- **Reporte Shipday:** busca cada envío como `ML-<shipment>` (prefijo en *ConfigPortal → SHIPDAY_PREFIJO*) y compara el orden y la hora de entrega contra lo planeado. Se genera solo después de `RUTA_REPORTE_HORA` (22 h) y llega por correo y push a los admins; también se puede generar en Más → Rutas y reporte. Se guarda en *ReporteRutas*. Tolerancia: `RUTA_TOLERANCIA_MIN`. Si las horas de Shipday salen corridas 6 h, cambia `SHIPDAY_HORA_UTC`.
+- Calificación: **Bien** = ≥85 % en orden, ≤10 % tarde y todo entregado; **Regular** = ≥65 % en orden, ≤30 % tarde y casi todo entregado; si no, **Mal**.

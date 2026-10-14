@@ -16,6 +16,23 @@ const perDe = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${d.getDate() <=
 const PER = perDe(HOY);
 const ANT = (() => { const p = periodo(PER); const d = new Date(p.desde + 'T12:00'); d.setDate(d.getDate() - 1); return perDe(d); })();
 
+
+const RUTA_DEMO = { ruta_id: 'RT-000001', fecha: hoy, num: 1, total: 2, salida: '10:00', fin: '13:05', km: 31.4, envios: 7, color: '#e4572e', deposito: [19.4182, -99.1369], estatus: 'activa',
+  paradas: [
+    { orden: 1, eta: '10:22', envios: ['48243897333'], ref: 'Norma Cruz', dir: 'Calle Norte 54 3831, Gustavo A. Madero, CP 07858', lat: 19.46311, lng: -99.116743, espera: 10, tipo: 'same_day' },
+    { orden: 2, eta: '10:51', envios: ['48244095998'], ref: 'Carlos Ramirez', dir: 'Calle Grupo de Los Cien Lt 1377, Tlalnepantla de Baz, CP 54189', lat: 19.540453, lng: -99.116717, espera: 10, tipo: 'same_day' },
+    { orden: 3, eta: '11:14', envios: ['48240481351', '48240481352'], ref: 'Karla Paola Reyes', dir: 'Avenida Benito Juárez 77, Tlalnepantla de Baz, CP 54100', lat: 19.53435, lng: -99.158847, espera: 12, tipo: 'next_day' },
+    { orden: 4, eta: '11:58', envios: ['48243469169'], ref: 'Luis Fernando Arriaga', dir: 'Calle Vía José López Portillo 41, Coacalco, CP 55700', lat: 19.636277, lng: -99.107174, espera: 10, tipo: 'next_day' },
+    { orden: 5, eta: '12:31', envios: ['48243941372'], ref: 'Miguel Morales', dir: 'Calle Colina de Mocuzari 55, Naucalpan, CP 53140', lat: 19.495185, lng: -99.244847, espera: 10, tipo: 'next_day' },
+    { orden: 6, eta: '12:55', envios: ['48239696517'], ref: 'María Concepción Bautista', dir: 'Calle Ignacio López Rayón Mz4 Lt32, Chimalhuacán, CP 56340', lat: 19.403525, lng: -98.973793, espera: 10, tipo: 'next_day' },
+  ], geom: [] };
+const REPORTE_DEMO = [
+  { ruta_id: 'RT-000001', no_empleado: '4', nombre: 'Saidd Argenis López', envios: 7, entregados: 7, no_entregados: 0, en_orden: 6, fuera_orden: 0, pct_orden: 100, tarde: 0, retraso_prom: 3, fin_plan: '13:05', fin_real: '12:58', otros_repartidores: '', calificacion: 'Bien', generado: hoy + ' 22:00',
+    detalle: [{ o: 1, eta: '10:22', real: '10:25', dif: 3, estado: 'entregado', envios: 1, entregados: 1 }, { o: 2, eta: '10:51', real: '10:49', dif: -2, estado: 'entregado', envios: 1, entregados: 1 }, { o: 3, eta: '11:14', real: '11:20', dif: 6, estado: 'entregado', envios: 2, entregados: 2 }] },
+  { ruta_id: 'RT-000002', no_empleado: '92', nombre: 'Jonatan Ortega', envios: 7, entregados: 5, no_entregados: 2, en_orden: 3, fuera_orden: 2, pct_orden: 60, tarde: 2, retraso_prom: 28, fin_plan: '13:30', fin_real: '14:45', otros_repartidores: 'Angel Campos', calificacion: 'Mal', generado: hoy + ' 22:00',
+    detalle: [{ o: 1, eta: '10:30', real: '11:40', dif: 70, estado: 'entregado', envios: 1, entregados: 1 }, { o: 2, eta: '10:55', real: '10:41', dif: -14, estado: 'entregado', envios: 1, entregados: 1 }, { o: 3, eta: '11:20', real: '', dif: null, estado: 'fallido', envios: 1, entregados: 0 }] },
+];
+
 const personal = [
   { no_empleado: '1', nombre: 'Cristhian Michel Guevara Padilla', rfc: 'GUPC900101AB1', puesto: 'Director', rol: 'admin', salario_diario: 0, clabe: '', entrada: '', dias: '', pin: '482915' },
   { no_empleado: '4', nombre: 'Saidd Argenis López', rfc: 'LOAS950505H12', puesto: 'Repartidor', rol: 'empleado', salario_diario: 320, clabe: '012180015237752341', entrada: '9:00', dias: 'L,M,Mi,J,V,S', flotilla_id: 'U-004', ingreso: '2025-03-10', pin: '482915' },
@@ -205,7 +222,8 @@ export function handle(action, d, token) {
         saldo_adeudos: adeudos.filter(x => x.no_empleado === p.no_empleado && x.estatus === 'activo').reduce((s, x) => s + x.saldo, 0),
         cargos_pendientes: p.flotilla_id ? cargos.filter(c => c.responsable_id === p.flotilla_id && !c.cobrado).reduce((s, c) => s + c.monto, 0) : 0,
         solicitudes_pendientes: solicitudes.filter(s => s.no_empleado === p.no_empleado && s.estatus === 'pendiente').length,
-        repartidor: esRep(p), bienvenida: bienv(p), accesos: appsPara(p).filter(a => a.acceso_directo) };
+        repartidor: esRep(p), bienvenida: bienv(p), accesos: appsPara(p).filter(a => a.acceso_directo),
+        ruta: esRep(p) ? { ruta_id: 'RT-000001', fecha: hoy, paradas: RUTA_DEMO.paradas.length, envios: 7, salida: '10:00', fin: '13:05' } : null };
     }
     case 'perfil': { const p = me(token); const ing = p.ingreso || ''; const anios = ing ? Math.floor((HOY - new Date(ing)) / 3.156e10) : 0;
       return { ...p, fecha_ingreso: ing, antiguedad: ing ? `${anios} año(s)` : '', clabe: p.clabe ? '•••• ' + p.clabe.slice(-4) : '', banco: p.clabe ? 'BBVA' : '', horario: { entrada: p.entrada, dias: p.dias, comida: p.entrada ? 60 : '' }, celular_checador: true,
@@ -300,6 +318,13 @@ export function handle(action, d, token) {
       notificar(s.no_empleado, 'solicitud', (d.aprobar ? '✅ Aprobada: ' : '❌ Rechazada: ') + s.tipo_txt, d.comentario || '', s.sol_id); return true; }
     case 'enviarAviso': ADMIN(); { const dest = d.destinatarios === 'todos' ? personal.map(p => p.no_empleado) : d.destinatarios; dest.forEach(no => notificar(no, 'aviso', '📢 ' + d.titulo, d.mensaje, 'AV')); return { enviados: dest.length, con_push: dest.filter(x => dispositivos.has(x)).length }; }
     case 'avisosEnviados': ADMIN(); return [{ ref: 'AV-00001', fecha: periodo(ANT).hasta + ' 09:00', titulo: '📢 Junta el sábado', mensaje: 'Junta general a las 8:30 en la base.', total: 7, leidos: 4 }];
+    case 'miRuta': { const p = me(token); return esRep(p) ? { ...RUTA_DEMO, nombre: p.nombre } : null; }
+    case 'rutasConfig': ADMIN(); return { tomtom: false, shipday: true, empleados: personal.map(p => ({ no_empleado: p.no_empleado, nombre: p.nombre, telefono: '5512345678', repartidor: esRep(p) })).sort((a, b) => b.repartidor - a.repartidor) };
+    case 'guardarClaves': ADMIN(); throw new Error('En la demostración no se guardan claves.');
+    case 'tomtomRutas': ADMIN(); throw new Error('En la demostración no hay TomTom.');
+    case 'publicarRutas': ADMIN(); return { publicadas: (d.rutas || []).filter(r => r.no_empleado).length, con_push: 1 };
+    case 'rutasAdmin': ADMIN(); return { fecha: d.fecha, shipday: true, rutas: [{ ruta_id: 'RT-000001', fecha: d.fecha, no_empleado: '4', nombre: 'Saidd Argenis López', num: 1, total: 2, salida: '10:00', fin: '13:05', km: 31.4, paradas: 6, envios: 7, estatus: 'activa', visto: d.fecha + ' 09:52' }, { ruta_id: 'RT-000002', fecha: d.fecha, no_empleado: '92', nombre: 'Jonatan Ortega', num: 2, total: 2, salida: '10:00', fin: '13:30', km: 28.2, paradas: 7, envios: 7, estatus: 'activa', visto: '' }], reporte: REPORTE_DEMO };
+    case 'reporteRutas': ADMIN(); return { fecha: d.fecha, rutas: 2, reporte: REPORTE_DEMO };
     default: throw new Error('Acción no simulada: ' + action);
   }
 }
