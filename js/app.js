@@ -1420,6 +1420,7 @@ async function rutaView(back) {
           h('div', { class: 'small' }, h('strong', {}, (p.envios || []).length > 1 ? `Envíos (${p.envios.length}): ` : 'Envío: '), (p.envios || []).join(', ')),
           p.ref && h('div', { class: 'small' }, p.ref),
           h('div', { class: 'muted small' }, p.dir || `${p.lat}, ${p.lng}`),
+          p.compromiso ? h('div', { class: 'small' }, h('strong', {}, 'Compromiso: '), p.compromiso) : null,
           p.espera ? h('div', { class: 'muted tiny' }, `Espera ${p.espera} min`) : null)),
       h('div', { class: 'row gap8 wrap', style: 'margin-top:8px' },
         h('a', { class: 'btn sm primary', href: navUrl(p), target: '_blank', rel: 'noopener', onclick: e => e.stopPropagation() }, '🧭 Navegar'),
@@ -1455,7 +1456,7 @@ async function rutasAdminView(f) {
     !d.shipday ? h('div', { class: 'banner warn' }, 'Falta la key de Shipday. Guárdala en el ruteador → Claves del servidor.')
       : d.rutas.length ? h('div', {},
         h('button', { class: 'btn block', onclick: generar }, d.reporte.length ? '↻ Actualizar reporte' : 'Generar reporte ahora'),
-        h('p', { class: 'muted small' }, 'Se genera solo cada noche y te llega por correo. Compara el orden y la hora de cada entrega en Shipday (ML-número) contra lo planeado.')) : null,
+        h('p', { class: 'muted small' }, 'Se genera solo después de las 23:00 (límite de entrega) y te llega por correo. Compara el orden y la hora de cada entrega en Shipday (ML-número) contra lo planeado.')) : null,
     (d.reporte || []).sort((a, b) => a.nombre.localeCompare(b.nombre)).map(x => h('details', { class: 'card' },
       h('summary', { class: 'row between' }, h('strong', {}, x.nombre), h('span', { class: 'badge b-' + CAL[x.calificacion] }, x.calificacion)),
       h('div', { class: 'kpis', style: 'margin-top:8px' },

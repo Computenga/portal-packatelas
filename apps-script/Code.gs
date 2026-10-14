@@ -95,7 +95,7 @@ const CONFIG_DEFAULTS = [
   ['FONDEADORA_REMITENTE', 'info@negocios.fondeadora.com', 'Remitente de los correos de Fondeadora'],
   ['ALTAS_FOLDER_ID', '', 'Carpeta de Drive con los documentos de personas que aún no se dan de alta (se crea sola)'],
   ['RUTA_TOLERANCIA_MIN', '20', 'Minutos de tolerancia contra la hora estimada antes de contar una entrega como tarde'],
-  ['RUTA_REPORTE_HORA', '22', 'Hora (0-23) del reporte diario de rutas contra Shipday'],
+  ['RUTA_REPORTE_HORA', '23', 'Hora (0-23) del reporte diario de rutas contra Shipday (después del límite de entrega de las 23:00)'],
   ['SHIPDAY_PREFIJO', 'ML-', 'Prefijo de los números de orden en Shipday (antes del número de shipment)'],
   ['SHIPDAY_HORA_UTC', 'SI', 'SI si Shipday devuelve las horas en UTC sin zona; NO si vienen en hora de CDMX'],
 ];
@@ -1976,7 +1976,7 @@ function reporteRutas_(fecha, automatico) {
 function tareaReporteRutas() {
   if (!ss_().getSheetByName('Rutas') || !prop_('SHIPDAY_KEY')) return;
   const hora = Number(fmt_(new Date(), 'HH'));
-  if (hora < Number(config_('RUTA_REPORTE_HORA', 22))) return;
+  if (hora < Number(config_('RUTA_REPORTE_HORA', 23))) return;
   const fecha = hoy_();
   const pk = 'REPORTE_RUTAS_' + fecha;
   if (prop_(pk)) return;

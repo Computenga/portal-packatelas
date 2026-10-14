@@ -117,7 +117,7 @@ details.route li span{color:var(--muted)}
         </div>
         <div class="row">
           <div><label>Destinatario</label><select id="m_name"></select></div>
-          <div><label>Teléfono</label><select id="m_tel"></select></div>
+          <div><label>Estado (entidad)</label><select id="m_edo"></select></div>
         </div>
         <div class="row">
           <div><label>Estado del envío</label><select id="m_estado"></select></div>
@@ -125,7 +125,7 @@ details.route li span{color:var(--muted)}
         </div>
         <div class="row">
           <div><label>Tipo de envío</label><select id="m_tipo"></select></div>
-          <div></div>
+          <div><label>Fecha compromiso</label><select id="m_comp"></select></div>
         </div>
         <div class="btns"><button type="button" id="mapReset">Volver a detectar</button></div>
       </div>
@@ -439,7 +439,8 @@ const FIELDS=[
   {id:'m_city',k:'city',exact:['ciudad','municipio','alcaldia','delegacion','city'],re:/^(ciudad|municipio|alcaldia|delegacion)/},
   {id:'m_cp',k:'cp',exact:['cp','codigopostal','zip','zipcode'],re:/^(cp|codigopostal|zip)/},
   {id:'m_name',k:'name',exact:['destinatario','cliente','nombre','receptor'],re:/^(destinatario|cliente|nombre|receptor)/},
-  {id:'m_tel',k:'tel',exact:['telefono','tel','celular','phone'],re:/^(telefono|tel|celular|phone)/},
+  {id:'m_edo',k:'edo',exact:['estado','entidad','entidadfederativa','state'],re:/^(entidad|state)$/},
+  {id:'m_comp',k:'comp',exact:['requesteddeliverytime','fechacompromiso','compromiso','fechadeentrega'],re:/^(requesteddelivery|fechacompromiso|compromiso)/},
   {id:'m_estado',k:'estado',exact:['estadoml','status','estatus','estadoenvio'],re:/^(estadoml|estatus|status)$/},
   {id:'m_tipo',k:'tipo',exact:['shippingmethodtype','tipo','tipoenvio','servicio'],re:/^(shippingmethodtype|tipoenvio)/},
   {id:'m_espera',k:'espera',exact:['espera','esperamin','tiempoespera','minutosespera'],re:/^(espera|tiempoespera)/}
@@ -470,6 +471,17 @@ function checkMapping(){
   return!miss.length;
 }
 function getMap(){const m={};FIELDS.forEach(F=>m[F.k]=parseInt($(F.id).value));return m;}
+/** '13/10/2026, 11:00:00 p.m.' / número de Excel / ISO → 'mar 13/10 23:00' */
+function fmtCompromiso(v){
+  if(v===''||v==null||v==='-')return'';
+  let d=null;
+  if(typeof v==='number'&&v>20000)d=new Date(Math.round((v-25569)*864e5)+new Date().getTimezoneOffset()*6e4);
+  else{const t=String(v).trim();const m=t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s+(\d{1,2}):(\d{2})(?::\d{2})?\s*([ap])?\.?\s*m?\.?/i);
+    if(m){let h=+m[4];if(m[6]){const pm=/p/i.test(m[6]);if(pm&&h<12)h+=12;if(!pm&&h===12)h=0;}d=new Date(+m[3],+m[2]-1,+m[1],h,+m[5]);}
+    else{const x=new Date(t);if(!isNaN(x))d=x;else return t;}}
+  if(!d||isNaN(d))return'';
+  return d.toLocaleDateString('es-MX',{weekday:'short'}).replace('.','')+' '+String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+}
 const DONE_STATES=/^(delivered|cancelled|canceled|entregado|cancelado|not_delivered)$/i;
 const cell=(r,i)=>{if(i<0)return'';const v=String(r[i]??'').trim();return v==='-'?'':v;};
 function buildStops(cfg){
@@ -483,12 +495,12 @@ function buildStops(cfg){
     if(!isFinite(lat)||!isFinite(lng)||(lat===0&&lng===0)){bad.push(id);return;}
     if(Math.abs(lat)>60&&Math.abs(lng)<60){const t=lat;lat=lng;lng=t;}
     if(lat<18.8||lat>20.4||lng<-100||lng>-98.4)outside.push(id);
-    const city=cell(r,m.city),cp=cell(r,m.cp);
-    const dir=[cell(r,m.dir),city,cp?('CP '+cp):''].filter(Boolean).join(', ');
-    const tel=cell(r,m.tel);const telOk=tel&&/\d{6,}/.test(tel.replace(/\D/g,''))?tel:'';
+    const calle=cell(r,m.dir),city=cell(r,m.city),edo=cell(r,m.edo),cp=cell(r,m.cp);
+    const dir=[calle,city,cp?('CP '+cp):''].filter(Boolean).join(', ');
+    const comp=fmtCompromiso(m.comp>=0?r[m.comp]:'');
     const ref=cell(r,m.name);const tipo=cell(r,m.tipo).toLowerCase();
     const esp=m.espera>=0?parseNum(r[m.espera]):NaN;
-    parcels.push({id,dir,ref,tel:telOk,tipo,lat,lng,esp});
+    parcels.push({id,dir,calle,city,edo:edo.replace(/^Distrito Federal$/i,'CDMX').replace(/^Estado de M[eé]xico$/i,'Edo. Méx.'),cp,comp,ref,tipo,lat,lng,esp});
   });
   const stops=[],byKey=new Map();
   for(const p of parcels){
@@ -802,9 +814,13 @@ function highlight(i){
 // ===== Exportar =====
 const pdfSafe=s=>String(s??'').normalize('NFC').replace(/[^\x20-\x7E\xA0-\xFF]/g,'');
 function stopInfo(o,i,R){
-  const ps=o.st.parcels;
-  return{n:i+1,eta:hhmm(o.eta),same:ps.some(p=>p.tipo==='same_day'),ids:ps.map(p=>p.id),nombres:[...new Set(ps.map(p=>p.ref).filter(Boolean))].join(' | '),
-    tels:[...new Set(ps.map(p=>p.tel).filter(Boolean))].join(' / '),dir:o.st.dir||`${o.st.lat.toFixed(5)}, ${o.st.lng.toFixed(5)}`,
+  const ps=o.st.parcels,u=a=>[...new Set(a.filter(Boolean))];
+  const p0=ps[0]||{};
+  const zona=[p0.city,p0.edo].filter(Boolean).join(', ')+(p0.cp?' · CP '+p0.cp:'');
+  const tipos=u(ps.map(p=>p.tipo==='same_day'?'Mismo día':p.tipo==='next_day'?'Día siguiente':p.tipo?p.tipo.replace(/_/g,' '):''));
+  return{n:i+1,eta:hhmm(o.eta),same:ps.some(p=>p.tipo==='same_day'),ids:ps.map(p=>p.id),nombres:u(ps.map(p=>p.ref)).join(' | '),
+    calle:p0.calle||o.st.dir||`${o.st.lat.toFixed(5)}, ${o.st.lng.toFixed(5)}`,zona,dir:o.st.dir||`${o.st.lat.toFixed(5)}, ${o.st.lng.toFixed(5)}`,
+    comp:u(ps.map(p=>p.comp)).join(' / '),tipo:tipos.join(' / '),coords:`${o.st.lat.toFixed(5)}, ${o.st.lng.toFixed(5)}`,
     tramo:`${Math.round(o.legMin)} min${o.legKm!=null?' · '+o.legKm.toFixed(1)+' km':''} desde ${i?'la parada '+i:'Lassaga 54'}`,espera:Math.round(o.svcMin)};
 }
 function drawTicket(doc,R,cfg,draw){
@@ -829,10 +845,11 @@ function drawTicket(doc,R,cfg,draw){
     if(s.same){F('bold',9);T('MISMO DIA',M+CW,y,{align:'right'});}
     P((s.ids.length>1?`Envíos (${s.ids.length}): `:'Envío: ')+s.ids.join(', '),'bold',9.5);
     if(s.nombres)P(s.nombres,'bold',9.5);
-    if(s.tels)P('Tel: '+s.tels,'normal',9.5);
-    P(s.dir,'normal',9.5);
+    P(s.calle,'normal',9.5);
+    if(s.zona)P(s.zona,'bold',9.5);
+    if(s.comp)P('Compromiso: '+s.comp+(s.tipo?' · '+s.tipo:''),'bold',9);
     P(s.tramo+` · espera ${s.espera} min`,'normal',8.5);
-    P('Entregado [  ]   Hora: ______','bold',9,1.5);
+    P('GPS: '+s.coords,'normal',8,1);
     rule(y);y+=0.5;
   });
   P(`Fin estimado: ${hhmm(R.end)}`,'bold',11,4);
@@ -861,10 +878,11 @@ function ticketHTML(R,cfg){
     const s=stopInfo(o,i,R);
     h+=`<div class="s"><div class="row"><span><span class="b" style="font-size:${px(16)}">${s.n}</span> <span class="b" style="font-size:${px(12)}">~${s.eta}</span></span>${s.same?`<span class="tag">MISMO DÍA</span>`:''}</div>
       <div class="b">${s.ids.length>1?`Envíos (${s.ids.length}): `:'Envío: '}${esc(s.ids.join(', '))}</div>
-      ${s.nombres?`<div class="b">${esc(s.nombres)}</div>`:''}${s.tels?`<div>Tel: ${esc(s.tels)}</div>`:''}
-      <div>${esc(s.dir)}</div>
+      ${s.nombres?`<div class="b">${esc(s.nombres)}</div>`:''}
+      <div>${esc(s.calle)}</div>${s.zona?`<div class="b">${esc(s.zona)}</div>`:''}
+      ${s.comp?`<div class="b">Compromiso: ${esc(s.comp)}${s.tipo?' · '+esc(s.tipo):''}</div>`:''}
       <div style="font-size:${px(8.5)}">${esc(s.tramo)} · espera ${s.espera} min</div>
-      <div class="b" style="margin-top:3px">Entregado ☐ &nbsp; Hora: ______</div></div><hr>`;
+      <div style="font-size:${px(8)}">GPS: ${s.coords}</div></div><hr>`;
   });
   h+=`<div class="b" style="font-size:${px(12)};margin-top:4px">Fin estimado: ${hhmm(R.end)}</div><div class="b" style="margin-top:14px">Firma: ____________________</div>
   <div style="font-size:${px(8)};margin-top:4px">Generado ${new Date().toLocaleString('es-MX',{hour12:false})}</div><div style="height:12mm"></div></section>`;
@@ -890,7 +908,7 @@ function routeText(R){
   let t=`*PACKATELAS · Ruta ${R.num} de ${R.total}*${e?' · '+e.nombre:''}\n${R.start.toLocaleDateString('es-MX',{weekday:'long',day:'2-digit',month:'short'})}\nSalida ${hhmm(R.start)} desde Lassaga 54 · termina aprox ${hhmm(R.end)}\n${R.stops.length} paradas · ${R.parcels} envíos · ${R.km.toFixed(1)} km\n`;
   R.stops.forEach((o,i)=>{
     const s=stopInfo(o,i,R);
-    t+=`\n*${s.n}. ~${s.eta}*${s.same?' · MISMO DÍA':''} · ${s.ids.join(', ')}\n${s.nombres?s.nombres+'\n':''}${s.tels?'Tel '+s.tels+'\n':''}${s.dir}\n${mapsURL(o.st)}\n`;
+    t+=`\n*${s.n}. ~${s.eta}*${s.same?' · MISMO DÍA':''} · ${s.ids.join(', ')}\n${s.nombres?s.nombres+'\n':''}${s.calle}\n${s.zona?s.zona+'\n':''}${s.comp?'Compromiso: '+s.comp+'\n':''}${mapsURL(o.st)}\n`;
   });
   return t;
 }
@@ -914,7 +932,7 @@ async function publicar(){
   const R=S.result;const sched=currentSched();const asig=asignaciones();
   const rutas=sched.filter(s=>asig[s.num]).map(s=>({no_empleado:asig[s.num],num:s.num,total:s.total,salida:hhmm(s.start),fin:hhmm(s.end),km:+s.km.toFixed(1),color:s.color,
     deposito:[R.cfg.depot.lat,R.cfg.depot.lng],geom:simplificar(s.geom.map(p=>[+(+p[0]).toFixed(5),+(+p[1]).toFixed(5)]),900),
-    paradas:s.stops.map((o,i)=>{const x=stopInfo(o,i,s);return{orden:i+1,eta:x.eta,envios:x.ids,ref:x.nombres,tel:x.tels.split(' / ')[0]||'',dir:x.dir,lat:o.st.lat,lng:o.st.lng,espera:x.espera,tipo:x.same?'same_day':''};})}));
+    paradas:s.stops.map((o,i)=>{const x=stopInfo(o,i,s);return{orden:i+1,eta:x.eta,envios:x.ids,ref:x.nombres,dir:[x.calle,x.zona].filter(Boolean).join(', '),compromiso:x.comp,lat:o.st.lat,lng:o.st.lng,espera:x.espera,tipo:x.same?'same_day':''};})}));
   if(!rutas.length)return alert('Elige el repartidor de cada ruta en la columna "Repartidor".');
   const faltan=sched.length-rutas.length;
   if(!confirm(`Publicar ${rutas.length} ruta(s) del ${R.cfg.date}${faltan?` (${faltan} sin repartidor no se publican)`:''}? Reemplaza lo que ya se haya publicado para ese día y les llega una notificación.`))return;
