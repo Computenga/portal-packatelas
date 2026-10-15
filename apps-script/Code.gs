@@ -2047,6 +2047,8 @@ function recalcularFin_(list, ahora) {
 
 
 // ── Vincular repartidores de Shipday con empleados (por ID, no por nombre) ──
+/** Un empleado puede tener varias cuentas de repartidor en Shipday: IDs separados por coma. */
+function idsShipday_(p) { return String((p && p.shipday_id) || '').split(/[,;\s]+/).map(x => x.trim()).filter(String); }
 function personalConShipday_() { if (headers_('Personal').indexOf('shipday_id') < 0) ensureTab_('Personal', SCHEMA.Personal); }
 function shipdayRepartidores_() {
   personalConShipday_();
@@ -2059,7 +2061,7 @@ function shipdayRepartidores_() {
   return {
     repartidores: (Array.isArray(l) ? l : []).map(c => {
       const id = String(c.id);
-      const v = per.find(p => String(p.shipday_id || '') === id);
+      const v = per.find(p => idsShipday_(p).indexOf(id) >= 0);
       return { id: id, nombre: c.name || '', telefono: c.phoneNumber || '', correo: c.email || '', activo: c.isActive !== false,
         no_empleado: v ? String(v.no_empleado) : '', sugerido: v ? '' : sugerirEmpleado_(c, per) };
     }).sort((a, b) => (b.activo - a.activo) || a.nombre.localeCompare(b.nombre)),
@@ -2070,7 +2072,7 @@ function shipdayRepartidores_() {
 /** Solo una sugerencia para la pantalla (teléfono igual o mismo nombre); nunca se guarda sola. */
 function sugerirEmpleado_(c, per) {
   const tel = String(c.phoneNumber || '').replace(/\D/g, '').slice(-10);
-  const libres = per.filter(p => !p.shipday_id);
+  const libres = per.filter(p => !idsShipday_(p).length);
   if (tel.length === 10) { const t = libres.find(p => String(p.telefono || '').replace(/\D/g, '').slice(-10) === tel); if (t) return String(t.no_empleado); }
   const cand = libres.filter(p => mismoNombre_(c.name, p.nombre));
   return cand.length === 1 ? String(cand[0].no_empleado) : '';
@@ -2081,11 +2083,11 @@ function vincularShipday_(req, u) {
     const id = String(req.shipday_id || '').trim();
     if (!id) throw new Error('Falta el ID de Shipday');
     const per = rows_('Personal');
-    per.filter(p => String(p.shipday_id || '') === id).forEach(p => update_('Personal', p._row, { shipday_id: '' }));
+    per.filter(p => idsShipday_(p).indexOf(id) >= 0 && String(p.no_empleado) !== String(req.no_empleado || '')).forEach(p => { p.shipday_id = idsShipday_(p).filter(x => x !== id).join(', '); update_('Personal', p._row, { shipday_id: p.shipday_id }); });
     if (req.no_empleado) {
       const p = per.find(x => String(x.no_empleado) === String(req.no_empleado));
       if (!p) throw new Error('Empleado no encontrado');
-      update_('Personal', p._row, { shipday_id: id });
+      update_('Personal', p._row, { shipday_id: unicos_(idsShipday_(p).concat(id)).join(', ') });
     }
     bitacora_(u.no_empleado, 'vincular_shipday', 'Personal', req.no_empleado || '', id);
     return true;
@@ -2186,10 +2188,10 @@ function reporteRutas_(fecha, automatico) {
     const tarde = hechas.filter(d => d.dif != null && d.dif > tol).length;
     const retraso = hechas.length ? round_(hechas.reduce((s, d) => s + Math.max(0, d.dif || 0), 0) / hechas.length, 0) : 0;
     const envios = det.reduce((s, d) => s + d.envios, 0), entregados = det.reduce((s, d) => s + d.entregados, 0);
-    const sdId = String((rows_('Personal').find(p => String(p.no_empleado) === String(r.no_empleado)) || {}).shipday_id || '');
+    const sdIds = idsShipday_(rows_('Personal').find(p => String(p.no_empleado) === String(r.no_empleado)));
     const quien = [].concat.apply([], det.map(d => d.ids));
     // Con el ID de Shipday vinculado se compara por ID; sin vincular no se puede saber con certeza y se avisa.
-    const otros = sdId ? unicos_(quien.filter(x => x.id && x.id !== sdId).map(x => x.n || ('ID ' + x.id)))
+    const otros = sdIds.length ? unicos_(quien.filter(x => x.id && sdIds.indexOf(x.id) < 0).map(x => x.n || ('ID ' + x.id)))
       : quien.length ? ['(sin vincular en Shipday: ' + unicos_(quien.map(x => x.n || x.id)).join(', ') + ')'] : [];
     const pct = hechas.length ? round_(enOrden / hechas.length * 100, 0) : 0;
     const pctTarde = hechas.length ? tarde / hechas.length : 0;

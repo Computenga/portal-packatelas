@@ -1096,7 +1096,7 @@ async function personaView(p) {
     h('div', { class: 'grid2' }, inp('fecha_ingreso', 'Fecha de ingreso', { type: 'date' }), inp('salario_diario', 'Salario diario', { type: 'number', inputmode: 'decimal', step: '0.01' })),
     h('div', { class: 'grid2' }, inp('clabe', 'CLABE (18 dígitos)', { inputmode: 'numeric', maxlength: 18, class: 'input mono' }), inp('banco', 'Banco')),
     h('p', { class: 'muted tiny' }, 'Con la CLABE se reconocen sus depósitos de Fondeadora automáticamente.'),
-    h('div', { class: 'grid2' }, inp('flotilla_id', 'ID en la flotilla (ej. U-004)', { autocapitalize: 'characters' }), inp('shipday_id', 'ID de repartidor en Shipday', { inputmode: 'numeric' })),
+    h('div', { class: 'grid2' }, inp('flotilla_id', 'ID en la flotilla (ej. U-004)', { autocapitalize: 'characters' }), inp('shipday_id', 'ID(s) de repartidor en Shipday (separados por coma)')),
     section('Acceso'),
     h('div', { class: 'grid2' }, sel('rol', 'Rol', [['empleado', 'Empleado'], ['admin', 'Admin (rutas y reporte)'], ['patron', 'Patrón (super admin)']]), sel('estatus', 'Estatus', [['activo', 'Activo'], ['baja', 'Baja']])),
     inp('fecha_baja', 'Fecha de baja', { type: 'date' }),
@@ -1455,7 +1455,7 @@ async function shipdayVincularView() {
     h('optgroup', { label: 'Otros' }, d.empleados.filter(e => !e.repartidor).map(e => h('option', { value: e.no_empleado, selected: e.no_empleado === sel }, `${e.nombre} (No. ${e.no_empleado})`))));
   const sin = d.repartidores.filter(c => c.activo && !c.no_empleado).length;
   fill(body,
-    h('p', { class: 'muted small' }, 'El reporte y el seguimiento comparan por el ID de Shipday, no por nombre. Elige el empleado de cada repartidor; la sugerencia solo se guarda si la confirmas.'),
+    h('p', { class: 'muted small' }, 'El reporte y el seguimiento comparan por el ID de Shipday, no por nombre. Elige el empleado de cada repartidor; la sugerencia solo se guarda si la confirmas. Si alguien tiene dos cuentas en Shipday, vincula las dos al mismo empleado.'),
     sin > 0 && h('div', { class: 'banner warn' }, `${sin} repartidor(es) activos de Shipday sin vincular.`),
     d.repartidores.map(c => h('div', { class: 'card', style: c.activo ? '' : 'opacity:.6' },
       h('div', { class: 'row between' }, h('strong', {}, c.nombre || 'Sin nombre'), h('span', { class: 'muted tiny' }, 'ID ' + c.id + (c.activo ? '' : ' · inactivo'))),

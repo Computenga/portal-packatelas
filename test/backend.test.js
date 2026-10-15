@@ -447,6 +447,12 @@ t('rutas: claves en servidor, proxy TomTom, publicar, Mi ruta y reporte Shipday'
   fail(call('vincularShipday', { shipday_id: '11', no_empleado: '4' }, tok4), /Sin permiso/);
   ok(call('vincularShipday', { shipday_id: '11', no_empleado: '4' }, admin));
   assert.strictEqual(ok(call('shipdayRepartidores', {}, admin)).repartidores.find(x => x.id === '11').no_empleado, '4');
+  // dos cuentas de Shipday para el mismo empleado: vincular la segunda no borra la primera
+  ok(call('vincularShipday', { shipday_id: '33', no_empleado: '4' }, admin));
+  ok(call('vincularShipday', { shipday_id: '11', no_empleado: '4' }, admin));
+  assert.strictEqual(ok(call('personal', {}, admin)).find(p => p.no_empleado === '4').shipday_id, '11, 33');
+  ok(call('vincularShipday', { shipday_id: '33', no_empleado: '' }, admin));
+  assert.strictEqual(ok(call('personal', {}, admin)).find(p => p.no_empleado === '4').shipday_id, '11');
   // reporte Shipday: 222 entregado 10:20 (antes que 111 a 10:40 → orden correcto), 333 fallido, 444 no existe
   const rep = ok(call('reporteRutas', { fecha: '2026-10-12' }, admin));
   const r = rep.reporte[0];
