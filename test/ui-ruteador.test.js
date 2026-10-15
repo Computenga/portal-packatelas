@@ -28,7 +28,7 @@ const hav = (a, b) => { const R = 6371000, t = Math.PI / 180; const x = Math.sin
   });
   // altitud simulada: al norte (lat > 19.55) son cerros
   await p.route('**/api.open-meteo.com/**', route => { const u = new URL(route.request().url()); const la = u.searchParams.get('latitude').split(',').map(Number);
-    route.fulfill({ contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ elevation: la.map(x => x > 19.55 ? 2450 : 2240) }) }); });
+    route.fulfill({ contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ elevation: la.map((x, i) => 2240 + Math.max(0, (x - 19.55) * 4000) + (i % 13 === 0 ? 30 : 0)) }) }); });
   // API del portal simulada
   await p.route('**/script.google.com/**', async route => {
     const req = JSON.parse(route.request().postData());

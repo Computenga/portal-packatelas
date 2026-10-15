@@ -115,6 +115,7 @@ node test/ui.test.js carpeta  # recorre la app en modo demo y toma capturas
 
 - *Motos grandes* + *Motos chicas* = repartidores disponibles.
 - *Motos chicas pueden ir a*: solo CDMX (las del Edo. Méx. quedan para motos grandes) o CDMX y Edo. Méx. El estado sale de la columna Estado del Excel o, si no viene, del nombre de la alcaldía.
-- Opcionales para chicas: evitar cerros (más de N m arriba de la base, Open-Meteo) y evitar autopistas / carriles centrales (TomTom `avoid=motorways`, guardado 30 días en *AlcanceMoto*).
+- Opcionales para chicas: evitar cerros y evitar autopistas / carriles centrales (TomTom `avoid=motorways`, guardado 30 días en *AlcanceMoto*).
+- **Cerros (automático):** para cada parada se mide la altitud en dos anillos alrededor (~400 m y ~1.2 km, 6 puntos cada uno). Es cerro si la parada queda muy arriba de su entorno (*relieve*), si la pendiente cercana es alta, o si está muy arriba del valle (la base). Sensibilidad alta/media/baja = relieve 45/60/85 m · pendiente 7/9/12 % · valle 130/170/230 m. Altitudes: Open-Meteo desde el navegador (con caché local); si falla, el portal consulta Open-Meteo u OpenTopoData.
 - *Agrupar rutas por* estado o alcaldía/municipio: cada cambio de zona dentro de una ruta le cuesta al optimizador los minutos de *fuerza de agrupación* (no se suman al horario real), así salen rutas de pura CDMX, puro Edo. Méx. o por alcaldía.
 - Si faltan repartidores, los que se agregan son de moto grande. Tabla, ticket, WhatsApp y Excel muestran moto y zona de cada ruta.

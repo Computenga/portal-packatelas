@@ -230,6 +230,7 @@ const ACTIONS = {
   recoleccionRechazar: { ops: true, fn: recoleccionRechazar_ },
   clienteVolumen:   { ops: true, fn: clienteVolumen_ },
   alcanceMotoChica: { ops: true, fn: alcanceMotoChica_ },
+  elevaciones:      { ops: true, fn: elevaciones_ },
   seguimientoAhora: { ops: true, fn: () => seguimientoRutas_(true) },
   seguimientoRuta:  { ops: true, fn: (req) => seguimientoDetalle_(req.ruta_id) },
   shipdayMuestra:   { ops: true, fn: shipdayMuestra_ },
@@ -2560,6 +2561,28 @@ function recoleccionesVista_(fecha) {
       puntos: recs.filter(r => r.no_empleado === d.no_empleado && ['propuesta', 'asignada'].indexOf(r.estado) >= 0).reduce((s, r) => s + r.puntos, 0) })),
     clientes: rows_('ClientesRecoleccion').map(c => ({ cliente: c.cliente, volumen: c.volumen || '' })).sort((a, b) => (!!a.volumen - !!b.volumen) || String(a.cliente).localeCompare(String(b.cliente))),
     shipday: !!prop_('SHIPDAY_KEY') };
+}
+
+// ── Altitudes para detectar cerros (respaldo cuando el navegador no puede consultar Open-Meteo) ──
+function elevaciones_(req) {
+  const pts = (req.puntos || []).slice(0, 3000);
+  const out = new Array(pts.length).fill(null);
+  for (let i = 0; i < pts.length; i += 100) {
+    const lote = pts.slice(i, i + 100);
+    let ok = false;
+    try {
+      const r = UrlFetchApp.fetch('https://api.open-meteo.com/v1/elevation?latitude=' + lote.map(p => Number(p[0]).toFixed(4)).join(',') + '&longitude=' + lote.map(p => Number(p[1]).toFixed(4)).join(','), { muteHttpExceptions: true });
+      if (r.getResponseCode() === 200) { const j = JSON.parse(r.getContentText()); (j.elevation || []).forEach((e, k) => out[i + k] = e); ok = true; }
+    } catch (e) {}
+    if (!ok) {
+      try {
+        const r = UrlFetchApp.fetch('https://api.opentopodata.org/v1/srtm90m?locations=' + lote.map(p => Number(p[0]).toFixed(4) + ',' + Number(p[1]).toFixed(4)).join('|'), { muteHttpExceptions: true });
+        if (r.getResponseCode() === 200) JSON.parse(r.getContentText()).results.forEach((x, k) => out[i + k] = x.elevation);
+      } catch (e) {}
+      Utilities.sleep(1100);
+    }
+  }
+  return { elevaciones: out };
 }
 
 // ── Motos chicas: qué paradas se pueden hacer sin autopistas ──

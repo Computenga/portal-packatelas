@@ -149,7 +149,11 @@ details.route li span{color:var(--muted)}
         <div><label>Motos chicas pueden ir a</label><select id="smallZone"><option value="cdmx">Solo CDMX</option><option value="todo">CDMX y Edo. Méx.</option></select></div>
         <div><label>Agrupar rutas por</label><select id="grp"><option value="estado">Estado (CDMX / Edo. Méx.)</option><option value="alcaldia">Alcaldía / municipio</option><option value="">Sin agrupar</option></select></div>
       </div>
-      <label class="check"><input type="checkbox" id="altOn" checked>Motos chicas evitan cerros: más de <input type="number" id="altMax" min="0" step="10" value="120" style="width:70px;margin:0 4px;padding:3px 5px"> m arriba de la base</label>
+      <label class="check"><input type="checkbox" id="altOn" checked>Motos chicas evitan cerros (detección automática por relieve)</label>
+      <div class="row">
+        <div><label>Sensibilidad para cerros</label><select id="cerroSens"><option value="alta">Alta (marca más paradas)</option><option value="media" selected>Media</option><option value="baja">Baja (solo cerros fuertes)</option></select></div>
+        <div></div>
+      </div>
       <label class="check"><input type="checkbox" id="motoOn" checked>Motos chicas evitan autopistas y carriles centrales (TomTom)</label>
       <div class="row">
         <div><label>Moto chica: % más lento</label><input type="number" id="smallPen" min="0" step="5" value="15"></div>
@@ -415,10 +419,10 @@ function refreshFactor(){if(S.factorTouched)return;const h=parseInt(($('tStart')
 function readCfg(){
   const date=$('date').value;const start=new Date(`${date}T${$('tStart').value}:00`),end=new Date(`${date}T${$('tEnd').value}:00`);
   return{date,start,end,K:Math.max(1,(parseInt($('big').value)||0)+(parseInt($('small').value)||0)),big:Math.max(0,parseInt($('big').value)||0),wait:Math.max(0,parseFloat($('wait').value)||0),extra:Math.max(0,parseFloat($('extra').value)||0),
-    group:$('group').checked,factor:parseFloat($('factor').value)||1.5,adj:parseFloat($('adj').value)||1,small:Math.max(0,parseInt($('small').value)||0),smallZone:$('smallZone').value,grp:$('grp').value,grpPen:Math.max(0,parseFloat($('grpPen').value)||0)*60,altOn:$('altOn').checked,motoOn:$('motoOn').checked,altMax:Math.max(0,parseFloat($('altMax').value)||120),smallPen:Math.max(0,parseFloat($('smallPen').value)||0)/100,useTT:!!(S.srv&&S.srv.tomtom),ttMode:$('ttMode').value,
+    group:$('group').checked,factor:parseFloat($('factor').value)||1.5,adj:parseFloat($('adj').value)||1,small:Math.max(0,parseInt($('small').value)||0),smallZone:$('smallZone').value,grp:$('grp').value,grpPen:Math.max(0,parseFloat($('grpPen').value)||0)*60,altOn:$('altOn').checked,motoOn:$('motoOn').checked,cerroSens:$('cerroSens').value,smallPen:Math.max(0,parseFloat($('smallPen').value)||0)/100,useTT:!!(S.srv&&S.srv.tomtom),ttMode:$('ttMode').value,
     ms:parseInt($('quality').value)||4000,pw:Math.min(80,Math.max(40,parseFloat($('pw').value)||72)),fs:parseFloat($('fs').value)||1.15,skipDone:$('skipDone').checked,depot:{lat:parseFloat($('dLat').value),lng:parseFloat($('dLng').value)}};
 }
-const PERSIST=['tStart','tEnd','big','wait','extra','ttMode','adj','quality','pw','fs','small','altMax','smallPen','smallZone','grp','grpPen'];
+const PERSIST=['tStart','tEnd','big','wait','extra','ttMode','adj','quality','pw','fs','small','cerroSens','smallPen','smallZone','grp','grpPen'];
 function loadSettings(){
   PERSIST.forEach(id=>{const v=store.get('f.'+id,null);if(v!==null&&$(id))$(id).value=v;});
   ['group','skipDone','altOn','motoOn'].forEach(id=>{const v=store.get('f.'+id,null);if(v!==null)$(id).checked=v;});
@@ -642,18 +646,55 @@ function zonaRuta(out){
 }
 
 // ===== Altitud (Open-Meteo, gratis) =====
-const ELEV={};
-async function elevaciones(pts){
+const ELEV=(()=>{try{return JSON.parse(localStorage.getItem('rutasPK.elev')||'{}');}catch(e){return{};}})();
+function guardarElev(){try{const k=Object.keys(ELEV);if(k.length>60000)k.slice(0,k.length-60000).forEach(x=>delete ELEV[x]);localStorage.setItem('rutasPK.elev',JSON.stringify(ELEV));}catch(e){}}
+/** Altitud de cada punto: caché local → Open-Meteo directo → respaldo por el servidor del portal. */
+async function elevaciones(pts,onProg){
   const key=p=>p.lat.toFixed(4)+','+p.lng.toFixed(4);
-  const falta=[...new Set(pts.map(key))].filter(k=>!(k in ELEV));
+  let falta=[...new Set(pts.map(key))].filter(k=>!(k in ELEV));
+  let directo=true;
   for(let i=0;i<falta.length;i+=100){
+    onProg&&onProg(i/falta.length);
     const lote=falta.slice(i,i+100);
-    const r=await fetch(`https://api.open-meteo.com/v1/elevation?latitude=${lote.map(k=>k.split(',')[0]).join(',')}&longitude=${lote.map(k=>k.split(',')[1]).join(',')}`);
-    if(!r.ok)throw new Error('Open-Meteo '+r.status);
-    const j=await r.json();lote.forEach((k,n)=>ELEV[k]=j.elevation?.[n]??null);
-    if(i+100<falta.length)await sleep(300);
+    if(directo){
+      try{const r=await fetch(`https://api.open-meteo.com/v1/elevation?latitude=${lote.map(k=>k.split(',')[0]).join(',')}&longitude=${lote.map(k=>k.split(',')[1]).join(',')}`);
+        if(!r.ok)throw new Error(r.status);const j=await r.json();if(!j.elevation)throw new Error('sin datos');lote.forEach((k,n)=>ELEV[k]=j.elevation[n]??null);await sleep(250);continue;}
+      catch(e){directo=false;}
+    }
+    const resto=falta.slice(i);
+    const r=await api('elevaciones',{puntos:resto.map(k=>k.split(',').map(Number))});
+    resto.forEach((k,n)=>{if(r.elevaciones[n]!=null)ELEV[k]=r.elevaciones[n];});
+    break;
   }
-  return pts.map(p=>ELEV[key(p)]);
+  guardarElev();
+  return pts.map(p=>ELEV[key(p)]??null);
+}
+
+// ===== Cerros: relieve alrededor de cada parada =====
+// Para cada parada se mide la altitud en dos anillos (≈400 m y ≈1.2 km). Es cerro si la parada queda muy por encima
+// de su entorno (subida fuerte para llegar), si la pendiente cercana es alta, o si está muy arriba del valle (la base).
+const CERRO={alta:{relieve:45,pend:0.07,valle:130},media:{relieve:60,pend:0.09,valle:170},baja:{relieve:85,pend:0.12,valle:230}};
+function desplazar(p,m,ang){const dLat=m*Math.cos(ang)/111320,dLng=m*Math.sin(ang)/(111320*Math.cos(p.lat*Math.PI/180));return{lat:p.lat+dLat,lng:p.lng+dLng};}
+async function cerros(depot,stops,sens,onProg){
+  const U=CERRO[sens]||CERRO.media,ANG=[0,1,2,3,4,5].map(k=>k*Math.PI/3);
+  const muestras=stops.map(s=>({c:s,a:ANG.map(a=>desplazar(s,400,a)),b:ANG.map(a=>desplazar(s,1200,a+Math.PI/6))}));
+  const todos=[depot].concat(...muestras.map(m=>[m.c].concat(m.a,m.b)));
+  const el=await elevaciones(todos,onProg);
+  const base=el[0];const out=new Map();let k=1;
+  muestras.forEach((m,i)=>{
+    const e=el[k++],ea=m.a.map(()=>el[k++]),eb=m.b.map(()=>el[k++]);
+    if(e==null)return;
+    const va=ea.filter(x=>x!=null),vb=eb.filter(x=>x!=null);
+    if(!va.length)return;
+    const minCerca=Math.min(...va),minLejos=vb.length?Math.min(...vb):minCerca,minTodo=Math.min(minCerca,minLejos);
+    const relieve=e-minTodo,pend=(e-minCerca)/400,sobreValle=base!=null?e-base:0;
+    const sube=[];
+    if(relieve>=U.relieve)sube.push(`sube ${Math.round(relieve)} m en ~1 km`);
+    if(pend>=U.pend)sube.push(`pendiente ${Math.round(pend*100)}%`);
+    if(sobreValle>=U.valle)sube.push(`${Math.round(sobreValle)} m arriba de la base`);
+    if(sube.length)out.set(i,'cerro: '+sube.join(', '));
+  });
+  return out;
 }
 
 // ===== Duraciones reales y horarios =====
@@ -719,8 +760,8 @@ async function optimize(){
     if(cfg.small>0&&cfg.smallZone==='cdmx')stops.forEach((s,i)=>{if(s.estado!=='CDMX')restr.set(i+1,s.estado==='Edo. Méx.'?'Edo. Méx.: solo moto grande':'sin estado conocido: solo moto grande');});
     if(cfg.small>0&&cfg.altOn){
       setStatus('Revisando altitud de las paradas (motos chicas)…');
-      try{const el=await elevaciones(pts);const base=el[0];
-        if(base!=null)stops.forEach((s,i)=>{const e=el[i+1];if(e!=null&&e-base>cfg.altMax)restr.set(i+1,`cerro: ${Math.round(e-base)} m arriba de la base`);});}
+      try{const c=await cerros(cfg.depot,stops,cfg.cerroSens,p=>setStatus(`Revisando relieve de las paradas (motos chicas)… ${Math.round(p*100)}%`));
+        c.forEach((m,i)=>{if(!restr.has(i+1))restr.set(i+1,m);});}
       catch(e){warnings.push('No se pudo consultar la altitud de las paradas; las motos chicas no consideran cerros.');}
     }
     if(cfg.small>0&&cfg.motoOn){
@@ -850,7 +891,7 @@ function renderResult(){
   if(R.unreachStops.length)h+=`<div class="alert bad"><b>${R.unreachStops.length} parada(s) imposibles</b> en ese horario (solo el traslado desde Lassaga ya rebasa la hora límite): ${esc(R.unreachStops.map(s=>s.parcels.map(p=>p.id).join('/')).join(', '))}</div>`;
   R.warnings.forEach(w=>{h+=`<div class="alert warn">${esc(w)}</div>`;});
   if(R.cfg.small){const nCh=sched.filter(s=>s.chica).length;
-    h+=`<div class="alert info"><b>🏍️ ${sched.length-nCh} moto(s) grande(s) · 🛵 ${nCh} chica(s)</b>${R.cfg.smallZone==='cdmx'?' — las chicas solo en CDMX':''}${R.cfg.altOn?', sin cerros':''}${R.cfg.motoOn?', sin autopistas ni carriles centrales':''}. ${R.restrList.length?`${R.restrList.length} parada(s) quedaron solo para moto grande.`:'Ninguna parada requiere moto grande.'}`+
+    h+=`<div class="alert info"><b>🏍️ ${sched.length-nCh} moto(s) grande(s) · 🛵 ${nCh} chica(s)</b>${R.cfg.smallZone==='cdmx'?' — las chicas solo en CDMX':''}${R.cfg.altOn?', sin cerros (sensibilidad '+R.cfg.cerroSens+')':''}${R.cfg.motoOn?', sin autopistas ni carriles centrales':''}. ${R.restrList.length?`${R.restrList.length} parada(s) quedaron solo para moto grande.`:'Ninguna parada requiere moto grande.'}`+
       (R.restrList.length?`<details style="margin-top:6px"><summary>Ver paradas solo para moto grande</summary><ul style="margin:6px 0 0 18px">${R.restrList.map(x=>`<li>${esc(x.st.parcels.map(p=>p.id).join(', '))} · ${esc(x.st.dir||'')} — <i>${esc(x.motivo)}</i></li>`).join('')}</ul></details>`:'')+`</div>`;}
   const tp=sched.reduce((a,s)=>a+s.parcels,0),ts=sched.reduce((a,s)=>a+s.stops.length,0);
   h+=`<div class="chips">
