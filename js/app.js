@@ -1096,7 +1096,7 @@ async function personaView(p) {
     h('div', { class: 'grid2' }, inp('fecha_ingreso', 'Fecha de ingreso', { type: 'date' }), inp('salario_diario', 'Salario diario', { type: 'number', inputmode: 'decimal', step: '0.01' })),
     h('div', { class: 'grid2' }, inp('clabe', 'CLABE (18 dígitos)', { inputmode: 'numeric', maxlength: 18, class: 'input mono' }), inp('banco', 'Banco')),
     h('p', { class: 'muted tiny' }, 'Con la CLABE se reconocen sus depósitos de Fondeadora automáticamente.'),
-    inp('flotilla_id', 'ID en la flotilla (ej. U-004)', { autocapitalize: 'characters' }),
+    h('div', { class: 'grid2' }, inp('flotilla_id', 'ID en la flotilla (ej. U-004)', { autocapitalize: 'characters' }), inp('shipday_id', 'ID de repartidor en Shipday', { inputmode: 'numeric' })),
     section('Acceso'),
     h('div', { class: 'grid2' }, sel('rol', 'Rol', [['empleado', 'Empleado'], ['admin', 'Admin (rutas y reporte)'], ['patron', 'Patrón (super admin)']]), sel('estatus', 'Estatus', [['activo', 'Activo'], ['baja', 'Baja']])),
     inp('fecha_baja', 'Fecha de baja', { type: 'date' }),
@@ -1260,6 +1260,7 @@ VIEWS.pmas = function pmas() {
       h('div', {}, h('h3', {}, '👤 Ver mi portal de empleado'), h('p', { class: 'muted small' }, 'Tu asistencia, tus recibos y depósitos')), h('span', { class: 'chev' }, '›')),
     menu([
       ['🗺️', 'Rutas y reporte', 'Ruteador, rutas publicadas y reporte de Shipday', () => rutasAdminView()],
+      ['🔗', 'Repartidores en Shipday', 'Vincula cada repartidor de Shipday con su empleado', () => shipdayVincularView()],
       ['📝', 'Solicitudes', 'Justificantes, vacaciones, permisos, anticipos', () => solicitudesAdmin()],
       ['📢', 'Avisos', 'Comunicados por notificación', enviarAvisoView],
       ['💳', 'Adeudos y cargos', 'Préstamos y cargos de flotilla', () => adeudosAdmin()],
@@ -1436,6 +1437,32 @@ async function rutaView(back) {
         p.tel && h('a', { class: 'btn sm', href: 'tel:' + p.tel, onclick: e => e.stopPropagation() }, '📞 Llamar')))),
     h('p', { class: 'muted small center' }, 'Si una dirección está mal, avísale a tu coordinador antes de salir.'));
   try { mapEl.replaceChildren(); enfocar = await rutaMapa(mapEl, r); } catch (e) { fill(mapEl, h('p', { class: 'muted small center', style: 'padding:20px' }, e.message)); }
+}
+
+async function shipdayVincularView() {
+  state.tab = 'pmas';
+  const body = h('div', {}, loading());
+  screen('Repartidores en Shipday', body, { back: () => go('pmas') });
+  let d;
+  try { d = await api('shipdayRepartidores'); } catch (e) { return fill(body, errorBox(e, shipdayVincularView)); }
+  const nombre = no => (d.empleados.find(e => e.no_empleado === no) || {}).nombre || '';
+  const guardar = async (c, no) => {
+    try { await api('vincularShipday', { shipday_id: c.id, no_empleado: no }); toast(no ? `${c.nombre} → ${nombre(no)}` : 'Desvinculado', 'ok'); shipdayVincularView(); }
+    catch (e) { toast(e.message, 'error'); }
+  };
+  const opts = sel => [h('option', { value: '' }, '— Sin vincular —')].concat(
+    h('optgroup', { label: 'Repartidores' }, d.empleados.filter(e => e.repartidor).map(e => h('option', { value: e.no_empleado, selected: e.no_empleado === sel }, `${e.nombre} (No. ${e.no_empleado})`))),
+    h('optgroup', { label: 'Otros' }, d.empleados.filter(e => !e.repartidor).map(e => h('option', { value: e.no_empleado, selected: e.no_empleado === sel }, `${e.nombre} (No. ${e.no_empleado})`))));
+  const sin = d.repartidores.filter(c => c.activo && !c.no_empleado).length;
+  fill(body,
+    h('p', { class: 'muted small' }, 'El reporte y el seguimiento comparan por el ID de Shipday, no por nombre. Elige el empleado de cada repartidor; la sugerencia solo se guarda si la confirmas.'),
+    sin > 0 && h('div', { class: 'banner warn' }, `${sin} repartidor(es) activos de Shipday sin vincular.`),
+    d.repartidores.map(c => h('div', { class: 'card', style: c.activo ? '' : 'opacity:.6' },
+      h('div', { class: 'row between' }, h('strong', {}, c.nombre || 'Sin nombre'), h('span', { class: 'muted tiny' }, 'ID ' + c.id + (c.activo ? '' : ' · inactivo'))),
+      (c.telefono || c.correo) && h('div', { class: 'muted small' }, [c.telefono, c.correo].filter(Boolean).join(' · ')),
+      h('select', { class: 'input', style: 'margin-top:8px', onchange: e => guardar(c, e.target.value) }, opts(c.no_empleado)),
+      c.sugerido && h('div', { class: 'row between small', style: 'margin-top:6px' },
+        h('span', { class: 'muted' }, 'Sugerido: ' + nombre(c.sugerido)), h('button', { class: 'btn sm primary', onclick: () => guardar(c, c.sugerido) }, 'Vincular')))));
 }
 
 async function rutaSegView(r, f) {

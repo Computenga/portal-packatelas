@@ -24,7 +24,7 @@ const EMPRESA_DOMICILIO = 'Juan Lucas de Lassaga 54, Piso 1, Col. Obrera, Cuauht
 const SCHEMA = {
   Personal: ['no_empleado', 'nombre', 'rfc', 'curp', 'nss', 'puesto', 'area', 'rol', 'estatus', 'fecha_ingreso',
     'fecha_baja', 'salario_diario', 'clabe', 'banco', 'telefono', 'correo', 'flotilla_id', 'carpeta_docs',
-    'pin_hash', 'pin_intentos', 'pin_bloqueado', 'ultimo_acceso', 'notas', 'onb_rol', 'onb_docs', 'onb_apps'],
+    'pin_hash', 'pin_intentos', 'pin_bloqueado', 'ultimo_acceso', 'notas', 'onb_rol', 'onb_docs', 'onb_apps', 'shipday_id'],
   Recibos: ['recibo_id', 'no_empleado', 'nombre', 'periodo', 'desde', 'hasta', 'dias', 'salario_diario',
     'sueldo', 'bonos', 'otras_percepciones', 'desc_faltas', 'desc_retardos', 'desc_cargos', 'desc_adeudos',
     'otras_deducciones', 'total_percepciones', 'total_deducciones', 'neto', 'detalle_json', 'pdf_id', 'estatus',
@@ -206,6 +206,8 @@ const ACTIONS = {
   publicarRutas:    { ops: true, fn: publicarRutas_ },
   rutasAdmin:       { ops: true, fn: (req) => rutasAdmin_(req.fecha || hoy_()) },
   reporteRutas:     { ops: true, fn: (req) => reporteRutas_(req.fecha || hoy_(), false) },
+  shipdayRepartidores: { admin: true, fn: shipdayRepartidores_ },
+  vincularShipday:  { admin: true, fn: vincularShipday_ },
   seguimientoAhora: { ops: true, fn: () => seguimientoRutas_(true) },
   seguimientoRuta:  { ops: true, fn: (req) => seguimientoDetalle_(req.ruta_id) },
   shipdayMuestra:   { ops: true, fn: shipdayMuestra_ },
@@ -251,7 +253,7 @@ function ensureTab_(name, headers) {
     if (missing.length) sh.getRange(1, have.filter(String).length + 1, 1, missing.length).setValues([missing]);
   }
   // Textos que Sheets no debe convertir (RFC, CLABE, números de empleado, IDs)
-  ['no_empleado', 'clabe', 'rfc', 'curp', 'nss', 'telefono', 'flotilla_id', 'clave_rastreo', 'periodo', 'salida', 'fin', 'fin_plan', 'fin_real'].forEach(col => {
+  ['no_empleado', 'clabe', 'rfc', 'curp', 'nss', 'telefono', 'flotilla_id', 'shipday_id', 'clave_rastreo', 'periodo', 'salida', 'fin', 'fin_plan', 'fin_real'].forEach(col => {
     const i = headers.indexOf(col);
     if (i >= 0) sh.getRange(1, i + 1, sh.getMaxRows(), 1).setNumberFormat('@');
   });
@@ -1636,7 +1638,7 @@ function personalAdmin_() {
       no_empleado: String(p.no_empleado), nombre: p.nombre, rfc: p.rfc, curp: p.curp, nss: p.nss, puesto: p.puesto, area: p.area,
       rol: p.rol || 'empleado', estatus: p.estatus || 'activo', fecha_ingreso: fmt_(p.fecha_ingreso, 'yyyy-MM-dd'), fecha_baja: fmt_(p.fecha_baja, 'yyyy-MM-dd'),
       salario_diario: Number(p.salario_diario || 0), clabe: p.clabe, banco: p.banco, telefono: p.telefono, correo: p.correo,
-      flotilla_id: p.flotilla_id, notas: p.notas, tiene_pin: !!p.pin_hash, bloqueado: p.pin_bloqueado === 'SI',
+      flotilla_id: p.flotilla_id, shipday_id: String(p.shipday_id || ''), notas: p.notas, tiene_pin: !!p.pin_hash, bloqueado: p.pin_bloqueado === 'SI',
       ultimo_acceso: fmt_(p.ultimo_acceso, 'yyyy-MM-dd HH:mm'), push: disp.indexOf(String(p.no_empleado)) >= 0,
       en_checador: !!e.no, horario: e.no ? { entrada: e.entrada, dias: e.diasTxt, comida: e.comida } : null, celular_checador: !!e.celular,
       docs_por_revisar: rows_('DocsEmpleado').filter(d => d.owner === 'E:' + p.no_empleado && d.estatus === 'subido').length,
@@ -1646,7 +1648,7 @@ function personalAdmin_() {
 }
 
 const CAMPOS_EDITABLES = ['nombre', 'rfc', 'curp', 'nss', 'puesto', 'area', 'rol', 'estatus', 'fecha_ingreso', 'fecha_baja', 'salario_diario',
-  'clabe', 'banco', 'telefono', 'correo', 'flotilla_id', 'notas'];
+  'clabe', 'banco', 'telefono', 'correo', 'flotilla_id', 'shipday_id', 'notas'];
 
 function guardarPersona_(req, u) {
   return withLock_(() => {
@@ -2043,6 +2045,53 @@ function recalcularFin_(list, ahora) {
   });
 }
 
+
+// ── Vincular repartidores de Shipday con empleados (por ID, no por nombre) ──
+function personalConShipday_() { if (headers_('Personal').indexOf('shipday_id') < 0) ensureTab_('Personal', SCHEMA.Personal); }
+function shipdayRepartidores_() {
+  personalConShipday_();
+  const key = prop_('SHIPDAY_KEY');
+  if (!key) throw new Error('Falta la key de Shipday. Guárdala en el ruteador → Claves del servidor.');
+  const r = UrlFetchApp.fetch('https://api.shipday.com/carriers', { muteHttpExceptions: true, headers: { Authorization: 'Basic ' + key, Accept: 'application/json' } });
+  if (r.getResponseCode() !== 200) throw new Error('Shipday respondió ' + r.getResponseCode());
+  let l = []; try { l = JSON.parse(r.getContentText()); } catch (e) {}
+  const per = rows_('Personal').filter(p => p.estatus !== 'baja');
+  return {
+    repartidores: (Array.isArray(l) ? l : []).map(c => {
+      const id = String(c.id);
+      const v = per.find(p => String(p.shipday_id || '') === id);
+      return { id: id, nombre: c.name || '', telefono: c.phoneNumber || '', correo: c.email || '', activo: c.isActive !== false,
+        no_empleado: v ? String(v.no_empleado) : '', sugerido: v ? '' : sugerirEmpleado_(c, per) };
+    }).sort((a, b) => (b.activo - a.activo) || a.nombre.localeCompare(b.nombre)),
+    empleados: per.map(p => ({ no_empleado: String(p.no_empleado), nombre: p.nombre, repartidor: rolBienvenida_(p) === 'repartidor', shipday_id: String(p.shipday_id || '') }))
+      .sort((a, b) => (b.repartidor - a.repartidor) || String(a.nombre).localeCompare(String(b.nombre))),
+  };
+}
+/** Solo una sugerencia para la pantalla (teléfono igual o mismo nombre); nunca se guarda sola. */
+function sugerirEmpleado_(c, per) {
+  const tel = String(c.phoneNumber || '').replace(/\D/g, '').slice(-10);
+  const libres = per.filter(p => !p.shipday_id);
+  if (tel.length === 10) { const t = libres.find(p => String(p.telefono || '').replace(/\D/g, '').slice(-10) === tel); if (t) return String(t.no_empleado); }
+  const cand = libres.filter(p => mismoNombre_(c.name, p.nombre));
+  return cand.length === 1 ? String(cand[0].no_empleado) : '';
+}
+function vincularShipday_(req, u) {
+  return withLock_(() => {
+    personalConShipday_();
+    const id = String(req.shipday_id || '').trim();
+    if (!id) throw new Error('Falta el ID de Shipday');
+    const per = rows_('Personal');
+    per.filter(p => String(p.shipday_id || '') === id).forEach(p => update_('Personal', p._row, { shipday_id: '' }));
+    if (req.no_empleado) {
+      const p = per.find(x => String(x.no_empleado) === String(req.no_empleado));
+      if (!p) throw new Error('Empleado no encontrado');
+      update_('Personal', p._row, { shipday_id: id });
+    }
+    bitacora_(u.no_empleado, 'vincular_shipday', 'Personal', req.no_empleado || '', id);
+    return true;
+  });
+}
+
 // ── Shipday
 
 function shipdayGet_(nums) {
@@ -2130,14 +2179,18 @@ function reporteRutas_(fecha, automatico) {
       const dif = t && eta ? Math.round((t - eta) / 60000) : null;
       return { o: i + 1, eta: p.eta || '', real: t ? fmt_(t, 'HH:mm') : '', t: t, dif: dif, envios: infos.length, entregados: ent.length,
         estado: ent.length === infos.length ? 'entregado' : ent.length ? 'parcial' : infos.some(x => x.fallido) ? 'fallido' : infos.some(x => !x.encontrado) ? 'no_en_shipday' : 'pendiente',
-        repartidores: unicos_(infos.map(x => x.repartidor).filter(String)) };
+        repartidores: unicos_(infos.map(x => x.repartidor).filter(String)), ids: infos.map(x => ({ id: String(x.repartidor_id || ''), n: x.repartidor || '' })).filter(x => x.id || x.n) };
     });
     const hechas = det.filter(d => d.t).sort((a, b) => a.t - b.t);
     const enOrden = lis_(hechas.map(d => d.o));
     const tarde = hechas.filter(d => d.dif != null && d.dif > tol).length;
     const retraso = hechas.length ? round_(hechas.reduce((s, d) => s + Math.max(0, d.dif || 0), 0) / hechas.length, 0) : 0;
     const envios = det.reduce((s, d) => s + d.envios, 0), entregados = det.reduce((s, d) => s + d.entregados, 0);
-    const otros = unicos_([].concat.apply([], det.map(d => d.repartidores))).filter(n => !mismoNombre_(n, r.nombre));
+    const sdId = String((rows_('Personal').find(p => String(p.no_empleado) === String(r.no_empleado)) || {}).shipday_id || '');
+    const quien = [].concat.apply([], det.map(d => d.ids));
+    // Con el ID de Shipday vinculado se compara por ID; sin vincular no se puede saber con certeza y se avisa.
+    const otros = sdId ? unicos_(quien.filter(x => x.id && x.id !== sdId).map(x => x.n || ('ID ' + x.id)))
+      : quien.length ? ['(sin vincular en Shipday: ' + unicos_(quien.map(x => x.n || x.id)).join(', ') + ')'] : [];
     const pct = hechas.length ? round_(enOrden / hechas.length * 100, 0) : 0;
     const pctTarde = hechas.length ? tarde / hechas.length : 0;
     const noEnt = envios - entregados;

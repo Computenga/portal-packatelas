@@ -40,6 +40,8 @@ const srv = http.createServer((q, r) => {
   await p.waitForSelector('details.card');
   await shot('pat-rutas-vivo');
   await click('.ruta-live >> nth=1'); await p.waitForSelector('.kpis'); await shot('pat-ruta-detalle');
+  await click('.icon-btn[aria-label="Regresar"]'); await click('.icon-btn[aria-label="Regresar"]');
+  await click('.mi:has-text("Repartidores en Shipday")'); await p.waitForSelector('select.input'); await shot('pat-shipday-vincular');
   console.log(errors.length ? 'ERRORES:\n' + errors.join('\n') : 'Sin errores de consola');
   await b.close(); srv.close();
 })().catch(e => { console.error(e); process.exit(1); });

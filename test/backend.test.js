@@ -379,9 +379,9 @@ t('rutas: claves en servidor, proxy TomTom, publicar, Mi ruta y reporte Shipday'
   const calls = [];
   const resp = (code, obj) => ({ getResponseCode: () => code, getContentText: () => JSON.stringify(obj) });
   const SD = {
-    'ML-111': [{ orderId: 9, orderNumber: 'ML-111', orderStatus: { orderState: 'ALREADY_DELIVERED' }, activityLog: { deliveryTime: '2026-10-12T16:40:00Z' }, assignedCarrier: { name: 'Saidd Lopez' } }],
-    'ML-222': [{ orderId: 8, orderNumber: 'ML-222', orderStatus: { orderState: 'ALREADY_DELIVERED' }, activityLog: { deliveryTime: '2026-10-12 16:20:00' }, assignedCarrier: { name: 'Saidd Lopez' } }],
-    'ML-333': [{ orderId: 7, orderNumber: 'ML-333', orderStatus: { orderState: 'FAILED_DELIVERY' }, activityLog: {}, assignedCarrier: { name: 'Angel Campos' } }],
+    'ML-111': [{ orderId: 9, orderNumber: 'ML-111', orderStatus: { orderState: 'ALREADY_DELIVERED' }, activityLog: { deliveryTime: '2026-10-12T16:40:00Z' }, assignedCarrier: { id: 11, name: 'Saidd Lopez' } }],
+    'ML-222': [{ orderId: 8, orderNumber: 'ML-222', orderStatus: { orderState: 'ALREADY_DELIVERED' }, activityLog: { deliveryTime: '2026-10-12 16:20:00' }, assignedCarrier: { id: 11, name: 'Saidd Lopez' } }],
+    'ML-333': [{ orderId: 7, orderNumber: 'ML-333', orderStatus: { orderState: 'FAILED_DELIVERY' }, activityLog: {}, assignedCarrier: { id: 22, name: 'Angel Campos' } }],
   };
   const fetchOne = (url, o) => {
     calls.push(url);
@@ -391,7 +391,7 @@ t('rutas: claves en servidor, proxy TomTom, publicar, Mi ruta y reporte Shipday'
       const n = url.split('/calculateRoute/')[1].split('/json')[0].split(':').length;
       return resp(200, { routes: [{ legs: Array.from({ length: n - 1 }, (_, i) => ({ summary: { travelTimeInSeconds: 600 + i, lengthInMeters: 3000 }, points: Array.from({ length: 200 }, (_, k) => ({ latitude: 19.4 + k / 1e4, longitude: -99.1 })) })) }] });
     }
-    if (/shipday\.com\/carriers/.test(url)) return resp(o.headers.Authorization === 'Basic SDKEY' ? 200 : 401, []);
+    if (/shipday\.com\/carriers/.test(url)) return resp(o.headers.Authorization === 'Basic SDKEY' ? 200 : 401, [{ id: 11, name: 'Saidd A. Lopez', phoneNumber: '+52 55 1111 2222' }, { id: 22, name: 'Angel Campos' }]);
     if (/shipday\.com\/orders\//.test(url)) { const num = decodeURIComponent(url.split('/orders/')[1]); return SD[num] ? resp(200, SD[num]) : resp(404, { message: 'not found' }); }
     return resp(404, {});
   };
@@ -436,6 +436,17 @@ t('rutas: claves en servidor, proxy TomTom, publicar, Mi ruta y reporte Shipday'
   ok(call('publicarRutas', { fecha: '2026-10-12', rutas: [ruta] }, admin));
   assert.strictEqual(ok(call('rutasAdmin', { fecha: '2026-10-12' }, admin)).rutas.length, 1);
 
+  // sin vincular: no se adivina por nombre, se avisa
+  let r0 = ok(call('reporteRutas', { fecha: '2026-10-12' }, admin)).reporte[0];
+  assert(/sin vincular en Shipday/.test(r0.otros_repartidores), r0.otros_repartidores);
+  // vincular por ID: la sugerencia sale por teléfono, pero solo se guarda al confirmar
+  ok(call('guardarPersona', { persona: { no_empleado: '4', telefono: '5511112222' } }, admin));
+  const sr = ok(call('shipdayRepartidores', {}, admin));
+  assert.strictEqual(sr.repartidores.find(x => x.id === '11').sugerido, '4');
+  assert.strictEqual(sr.repartidores.find(x => x.id === '11').no_empleado, '');
+  fail(call('vincularShipday', { shipday_id: '11', no_empleado: '4' }, tok4), /Sin permiso/);
+  ok(call('vincularShipday', { shipday_id: '11', no_empleado: '4' }, admin));
+  assert.strictEqual(ok(call('shipdayRepartidores', {}, admin)).repartidores.find(x => x.id === '11').no_empleado, '4');
   // reporte Shipday: 222 entregado 10:20 (antes que 111 a 10:40 → orden correcto), 333 fallido, 444 no existe
   const rep = ok(call('reporteRutas', { fecha: '2026-10-12' }, admin));
   const r = rep.reporte[0];
