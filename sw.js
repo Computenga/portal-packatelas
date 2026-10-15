@@ -1,5 +1,5 @@
 // Service worker: caché de la app + notificaciones push de Firebase.
-const VERSION = 'portal-v1.5.0';
+const VERSION = 'portal-v1.6.0';
 const SHELL = ['./', './index.html', './css/app.css', './manifest.webmanifest', './js/app.js', './js/api.js', './js/media.js', './js/config.js',
   './icons/icon-192.png', './icons/icon-512.png'];
 

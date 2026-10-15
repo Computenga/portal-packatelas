@@ -939,7 +939,7 @@ function empOptions(){
 function simplificar(pts,n){if(pts.length<=n)return pts;const st=Math.ceil(pts.length/n),out=[];for(let i=0;i<pts.length;i+=st)out.push(pts[i]);out.push(pts[pts.length-1]);return out;}
 async function publicar(){
   const R=S.result;const sched=currentSched();const asig=asignaciones();
-  const rutas=sched.filter(s=>asig[s.num]).map(s=>({no_empleado:asig[s.num],num:s.num,total:s.total,salida:hhmm(s.start),fin:hhmm(s.end),km:+s.km.toFixed(1),color:s.color,
+  const rutas=sched.filter(s=>asig[s.num]).map(s=>({no_empleado:asig[s.num],num:s.num,total:s.total,salida:hhmm(s.start),fin:hhmm(s.end),limite:hhmm(s.deadline),km:+s.km.toFixed(1),color:s.color,
     deposito:[R.cfg.depot.lat,R.cfg.depot.lng],geom:simplificar(s.geom.map(p=>[+(+p[0]).toFixed(5),+(+p[1]).toFixed(5)]),900),
     paradas:s.stops.map((o,i)=>{const x=stopInfo(o,i,s);return{orden:i+1,eta:x.eta,envios:x.ids,ref:x.nombres,dir:[x.calle,x.zona].filter(Boolean).join(', '),compromiso:x.comp,lat:o.st.lat,lng:o.st.lng,espera:x.espera,tipo:x.same?'same_day':''};})}));
   if(!rutas.length)return alert('Elige el repartidor de cada ruta en la columna "Repartidor".');

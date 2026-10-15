@@ -90,3 +90,10 @@ node test/ui.test.js carpeta  # recorre la app en modo demo y toma capturas
 - **Admin** — rol `admin`: su portal de empleado más **Rutas y reporte** y el ruteador (publicar rutas, ver y generar el reporte). No ve nómina ni expedientes.
 - **Empleado** — rol `empleado`.
 - Instalaciones anteriores: si nadie tiene `patron`, el No. 1 pasa a patrón automáticamente.
+
+## Seguimiento en vivo
+
+- Cada 10 min (de `SEGUIMIENTO_DESDE` a `SEGUIMIENTO_HASTA`) se consultan en Shipday solo los envíos aún pendientes de las rutas activas del día.
+- Cuando uno cambia a entregado o fallido, a patrón y admins les llega **un push por ruta** con el resumen y cuántos quedan.
+- Recálculo: desde la última parada visitada y la hora actual, TomTom (tráfico real) hasta las paradas que faltan + espera de cada una → fin estimado contra el límite de la ruta (el del ruteador, o `RUTA_LIMITE`). Si deja de alcanzar llega una alerta ⚠️ (y otra si vuelve a ir a tiempo).
+- Panel: Más → Rutas y reporte → *En vivo* (se actualiza solo; botón *Revisar ahora*). Toca una ruta para ver cada parada y envío.

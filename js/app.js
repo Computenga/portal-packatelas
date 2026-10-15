@@ -1438,6 +1438,27 @@ async function rutaView(back) {
   try { mapEl.replaceChildren(); enfocar = await rutaMapa(mapEl, r); } catch (e) { fill(mapEl, h('p', { class: 'muted small center', style: 'padding:20px' }, e.message)); }
 }
 
+async function rutaSegView(r, f) {
+  const body = h('div', {}, loading());
+  screen(`Ruta ${r.num} · ${primerNombre(r.nombre)}`, body, { back: () => rutasAdminView(f) });
+  let d;
+  try { d = await api('seguimientoRuta', { ruta_id: r.ruta_id }); } catch (e) { return fill(body, errorBox(e)); }
+  const x = d.seguimiento;
+  const EST = { entregado: ['Entregado', 'ok', '✅'], fallido: ['Fallido', 'err', '❌'], pendiente: ['Pendiente', 'muted', '⏳'] };
+  fill(body,
+    h('div', { class: 'kpis' }, kpi('Entregados', `${x.entregados}/${x.total}`, '', 'ok'), kpi('Pendientes', x.pendientes, '', x.pendientes ? 'warn' : 'ok'),
+      kpi('Fallidos', x.fallidos, '', x.fallidos ? 'err' : ''), kpi('Fin aprox', x.fin_estimado || '—', 'límite ' + x.limite, x.estado === 'tarde' ? 'err' : 'ok')),
+    x.estado === 'tarde' && h('div', { class: 'banner error' }, `Con el tráfico actual terminaría ${x.retraso_min} min después del límite.`),
+    section('Paradas'),
+    d.paradas.map(p => { const done = p.envios.every(e => e.estado !== 'pendiente');
+      return h('div', { class: 'card', style: done ? 'opacity:.72' : '' },
+        h('div', { class: 'row between' }, h('strong', {}, `${p.orden}. ~${p.eta}`), h('span', { class: 'muted small' }, p.ref || '')),
+        h('div', { class: 'muted small' }, p.dir || ''),
+        p.envios.map(e => { const [l, c, i] = EST[e.estado] || EST.pendiente; return h('div', { class: 'row between small', style: 'margin-top:4px' },
+          h('span', {}, `${i} ${e.envio}`), h('span', { class: 'badge b-' + c }, l + (e.hora && e.estado !== 'pendiente' ? ' ' + e.hora : ''))); })); }),
+    h('p', { class: 'muted small center' }, 'Revisado ' + (x.actualizado || '—') + ' · estado tomado de Shipday (ML-envío)'));
+}
+
 const CAL = { Bien: 'ok', Regular: 'warn', Mal: 'err', 'Sin datos': 'muted' };
 const EST_PARADA = { entregado: ['Entregado', 'ok'], parcial: ['Parcial', 'warn'], fallido: ['Fallido', 'err'], pendiente: ['Sin entregar', 'err'], no_en_shipday: ['No está en Shipday', 'muted'] };
 async function rutasAdminView(f) {
@@ -1449,17 +1470,31 @@ async function rutasAdminView(f) {
   try { d = (await cached('rutasAdmin', { fecha: f }, live(() => rutasAdminView(f)))).data; } catch (e) { return fill(body, errorBox(e, () => rutasAdminView(f))); }
   const rep = {}; (d.reporte || []).forEach(x => rep[x.ruta_id] = x);
   const generar = async () => { try { await busy('Consultando Shipday…', () => api('reporteRutas', { fecha: f })); toast('Reporte actualizado', 'ok'); rutasAdminView(f); } catch (e) { toast(e.message, 'error', 6000); } };
+  const esHoy = f === isoHoy();
+  const vivo = async () => { try { const r = await busy('Revisando Shipday…', () => api('seguimientoAhora')); toast(r.avisos ? `${r.avisos} aviso(s) nuevos` : 'Sin cambios', 'ok'); rutasAdminView(f); } catch (e) { toast(e.message, 'error', 6000); } };
+  const seg = d.rutas.map(r => r.seguimiento || {});
+  const tot = seg.reduce((a, x) => ({ t: a.t + (x.total || 0), e: a.e + (x.entregados || 0), f: a.f + (x.fallidos || 0), p: a.p + (x.pendientes || 0), tarde: a.tarde + (x.estado === 'tarde' ? 1 : 0) }), { t: 0, e: 0, f: 0, p: 0, tarde: 0 });
+  if (esHoy && d.rutas.length) { const sq = state.seq; setTimeout(() => { if (state.seq === sq) rutasAdminView(f); }, 90000); }
   fill(body,
     h('div', { class: 'row gap8' }, h('input', { type: 'date', value: f, class: 'grow', onchange: e => rutasAdminView(e.target.value) }),
       h('a', { class: 'btn primary', href: 'ruteador.html' }, '🧭 Ruteador')),
+    esHoy && d.rutas.length > 0 && d.shipday && [
+      section('En vivo'),
+      tot.tarde > 0 && h('div', { class: 'banner error' }, h('strong', {}, `⚠️ ${tot.tarde} ruta(s) ya no alcanzan a terminar a tiempo`), h('div', { class: 'small' }, 'Con el tráfico actual y lo que les queda. Considera mandar apoyo.')),
+      h('div', { class: 'kpis' }, kpi('Entregados', `${tot.e}/${tot.t}`, tot.t ? Math.round(tot.e / tot.t * 100) + '%' : '', 'ok'), kpi('Pendientes', tot.p, 'por entregar', tot.p ? 'warn' : 'ok'),
+        kpi('Fallidos', tot.f, 'marcados en Shipday', tot.f ? 'err' : ''), kpi('Rutas tarde', tot.tarde, 'según recálculo', tot.tarde ? 'err' : 'ok')),
+      h('div', { class: 'row between' }, h('span', { class: 'muted small' }, 'Se revisa Shipday cada 10 min · se actualiza solo'), h('button', { class: 'btn sm', onclick: vivo }, '↻ Revisar ahora'))],
     section(`Rutas publicadas (${d.rutas.length})`),
-    d.rutas.length ? table([
-      { t: 'Ruta', f: r => h('strong', {}, r.num + '/' + r.total) },
-      { t: 'Repartidor', f: r => h('div', {}, h('strong', {}, r.nombre), h('div', { class: 'muted tiny' }, r.visto ? '👁 vista ' + r.visto.slice(11) : 'sin abrir')) },
-      { t: 'Paradas', cls: 'num', f: r => `${r.paradas} (${r.envios})` },
-      { t: 'Horario', f: r => `${r.salida}–${r.fin}` },
-      { t: 'Shipday', f: r => rep[r.ruta_id] ? h('span', { class: 'badge b-' + CAL[rep[r.ruta_id].calificacion] }, rep[r.ruta_id].calificacion) : '—' },
-    ], d.rutas) : empty('🗺️', 'No hay rutas publicadas para este día. Ármalas en el ruteador y toca "Publicar en la super app".'),
+    d.rutas.length ? d.rutas.map(r => { const x = r.seguimiento || {}; const pct = x.total ? Math.round((x.entregados + x.fallidos) / x.total * 100) : 0;
+      const est = x.estado === 'tarde' ? h('span', { class: 'badge b-err' }, `Tarde +${x.retraso_min} min`) : x.estado === 'a_tiempo' ? h('span', { class: 'badge b-ok' }, 'A tiempo') : x.estado === 'terminada' ? h('span', { class: 'badge b-info' }, 'Terminada') : h('span', { class: 'badge b-muted' }, r.visto ? 'Vista' : 'Sin abrir');
+      return h('button', { class: 'card tap ruta-live', style: x.estado === 'tarde' ? 'border-left:5px solid var(--err)' : '', onclick: () => rutaSegView(r, f) },
+        h('div', { class: 'row between' }, h('strong', {}, `Ruta ${r.num} · ${r.nombre}`), est),
+        h('div', { class: 'bar' }, h('span', { style: `width:${pct}%` })),
+        h('div', { class: 'row between small' },
+          h('span', {}, `✅ ${x.entregados || 0}  ❌ ${x.fallidos || 0}  ⏳ ${x.pendientes ?? r.envios}`),
+          h('span', { class: 'muted' }, x.actualizado ? `Fin aprox ${x.fin_estimado} · límite ${x.limite}` : `${r.salida}–${r.fin} · límite ${x.limite || ''}`)),
+        x.actualizado && h('div', { class: 'muted tiny' }, 'Revisado ' + x.actualizado + (rep[r.ruta_id] ? ' · reporte: ' + rep[r.ruta_id].calificacion : ''))); })
+      : empty('🗺️', 'No hay rutas publicadas para este día. Ármalas en el ruteador y toca "Publicar en la super app".'),
     section('Reporte contra Shipday'),
     !d.shipday ? h('div', { class: 'banner warn' }, 'Falta la key de Shipday. Guárdala en el ruteador → Claves del servidor.')
       : d.rutas.length ? h('div', {},

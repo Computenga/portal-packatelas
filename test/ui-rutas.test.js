@@ -38,8 +38,8 @@ const srv = http.createServer((q, r) => {
   await click('.tabbar button:has-text("Más")');
   await click('.mi:has-text("Rutas y reporte")');
   await p.waitForSelector('details.card');
-  await p.locator('details.card').nth(1).evaluate(d => d.open = true);
-  await shot('pat-rutas-reporte');
+  await shot('pat-rutas-vivo');
+  await click('.ruta-live >> nth=1'); await p.waitForSelector('.kpis'); await shot('pat-ruta-detalle');
   console.log(errors.length ? 'ERRORES:\n' + errors.join('\n') : 'Sin errores de consola');
   await b.close(); srv.close();
 })().catch(e => { console.error(e); process.exit(1); });

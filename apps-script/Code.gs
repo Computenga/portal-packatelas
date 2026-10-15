@@ -46,7 +46,8 @@ const SCHEMA = {
   Altas: ['alta_id', 'fecha', 'nombre', 'rfc', 'curp', 'telefono', 'correo', 'rol', 'estatus', 'folder_id', 'token_hash',
     'no_empleado', 'notas', 'fecha_resolucion', 'resuelta_por'],
   Rutas: ['ruta_id', 'fecha', 'no_empleado', 'nombre', 'num', 'total', 'salida', 'fin', 'km', 'paradas', 'envios', 'datos_json',
-    'estatus', 'publicada_por', 'fecha_publicacion', 'visto'],
+    'estatus', 'publicada_por', 'fecha_publicacion', 'visto', 'limite', 'seg_json', 'seg_actualizado', 'seg_recalculo', 'fin_estimado',
+    'estado_tiempo', 'retraso_min'],
   ReporteRutas: ['fecha', 'ruta_id', 'no_empleado', 'nombre', 'envios', 'entregados', 'no_entregados', 'en_orden', 'fuera_orden',
     'pct_orden', 'tarde', 'retraso_prom', 'fin_plan', 'fin_real', 'otros_repartidores', 'calificacion', 'detalle_json', 'generado'],
   Apps: ['app_id', 'nombre', 'descripcion', 'icono', 'color', 'tipo', 'url_instalar', 'android_package', 'url_abrir',
@@ -97,6 +98,10 @@ const CONFIG_DEFAULTS = [
   ['RUTA_TOLERANCIA_MIN', '20', 'Minutos de tolerancia contra la hora estimada antes de contar una entrega como tarde'],
   ['RUTA_REPORTE_HORA', '23', 'Hora (0-23) del reporte diario de rutas contra Shipday (después del límite de entrega de las 23:00)'],
   ['SHIPDAY_PREFIJO', 'ML-', 'Prefijo de los números de orden en Shipday (antes del número de shipment)'],
+  ['SEGUIMIENTO_MIN', '10', 'Cada cuántos minutos se revisa en Shipday el estado de las rutas del día (mínimo 10)'],
+  ['SEGUIMIENTO_DESDE', '8', 'Hora (0-23) desde la que se revisa Shipday'],
+  ['SEGUIMIENTO_HASTA', '23', 'Hora (0-23) hasta la que se revisa Shipday'],
+  ['RUTA_LIMITE', '23:00', 'Hora límite de entrega si la ruta no trae una (para el recálculo de si acaban a tiempo)'],
   ['SHIPDAY_HORA_UTC', 'SI', 'SI si Shipday devuelve las horas en UTC sin zona; NO si vienen en hora de CDMX'],
 ];
 
@@ -201,6 +206,8 @@ const ACTIONS = {
   publicarRutas:    { ops: true, fn: publicarRutas_ },
   rutasAdmin:       { ops: true, fn: (req) => rutasAdmin_(req.fecha || hoy_()) },
   reporteRutas:     { ops: true, fn: (req) => reporteRutas_(req.fecha || hoy_(), false) },
+  seguimientoAhora: { ops: true, fn: () => seguimientoRutas_(true) },
+  seguimientoRuta:  { ops: true, fn: (req) => seguimientoDetalle_(req.ruta_id) },
   shipdayMuestra:   { ops: true, fn: shipdayMuestra_ },
 };
 
@@ -228,6 +235,7 @@ function instalarTriggers() {
   ScriptApp.newTrigger('tareaFondeadora').timeBased().everyMinutes(5).create();
   ScriptApp.newTrigger('sincronizarPersonal').timeBased().everyHours(1).create();
   ScriptApp.newTrigger('tareaReporteRutas').timeBased().everyHours(1).create();
+  ScriptApp.newTrigger('tareaSeguimientoRutas').timeBased().everyMinutes(10).create();
 }
 
 function ensureTab_(name, headers) {
@@ -1686,11 +1694,17 @@ function prop_(k) { return PropertiesService.getScriptProperties().getProperty(k
 function setProp_(k, v) { const p = PropertiesService.getScriptProperties(); if (v) p.setProperty(k, v); else if (p.deleteProperty) p.deleteProperty(k); else p.setProperty(k, ''); }
 function asegurarTriggerReporte_() {
   try {
-    if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction && t.getHandlerFunction() === 'tareaReporteRutas'))
-      ScriptApp.newTrigger('tareaReporteRutas').timeBased().everyHours(1).create();
-  } catch (e) { console.warn('trigger reporte', e); }
+    const h = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction && t.getHandlerFunction());
+    if (h.indexOf('tareaReporteRutas') < 0) ScriptApp.newTrigger('tareaReporteRutas').timeBased().everyHours(1).create();
+    if (h.indexOf('tareaSeguimientoRutas') < 0) ScriptApp.newTrigger('tareaSeguimientoRutas').timeBased().everyMinutes(10).create();
+  } catch (e) { console.warn('trigger rutas', e); }
 }
-function rutasTabs_() { ['Rutas', 'ReporteRutas'].forEach(n => { if (!ss_().getSheetByName(n)) ensureTab_(n, SCHEMA[n]); }); }
+function rutasTabs_() {
+  ['Rutas', 'ReporteRutas'].forEach(n => {
+    const sh = ss_().getSheetByName(n);
+    if (!sh || SCHEMA[n].some(c => headers_(n).indexOf(c) < 0)) ensureTab_(n, SCHEMA[n]);
+  });
+}
 
 function rutasConfig_() {
   const per = rows_('Personal').filter(p => p.estatus !== 'baja');
@@ -1807,7 +1821,7 @@ function publicarRutas_(req, u) {
       if (txt.length > 49000) throw new Error('La ruta ' + rt.num + ' tiene demasiadas paradas para guardarse');
       const id = nextId_('RT', 6);
       append_('Rutas', { ruta_id: id, fecha: fecha, no_empleado: String(p.no_empleado), nombre: p.nombre, num: rt.num, total: rt.total,
-        salida: rt.salida, fin: rt.fin, km: round_(rt.km, 1), paradas: (rt.paradas || []).length,
+        salida: rt.salida, fin: rt.fin, limite: /^\d{1,2}:\d{2}$/.test(String(rt.limite || '')) ? rt.limite : '', fin_estimado: rt.fin, estado_tiempo: '', km: round_(rt.km, 1), paradas: (rt.paradas || []).length,
         envios: (rt.paradas || []).reduce((s, x) => s + (x.envios || []).length, 0), datos_json: txt, estatus: 'activa',
         publicada_por: u.no_empleado, fecha_publicacion: new Date(), visto: '' });
       pubs.push({ id: id, no: String(p.no_empleado), rt: rt });
@@ -1829,6 +1843,7 @@ function pickRuta_(x, conDatos) {
   const o = { ruta_id: x.ruta_id, fecha: fmt_(x.fecha, 'yyyy-MM-dd'), no_empleado: String(x.no_empleado), nombre: x.nombre, num: Number(x.num),
     total: Number(x.total), salida: horaCelda_(x.salida), fin: horaCelda_(x.fin), km: Number(x.km || 0), paradas: Number(x.paradas || 0),
     envios: Number(x.envios || 0), estatus: x.estatus, visto: fmt_(x.visto, 'yyyy-MM-dd HH:mm') };
+  o.seguimiento = segResumen_(x);
   if (conDatos) { try { Object.assign(o, JSON.parse(x.datos_json)); } catch (e) { o.paradas_lista = []; } }
   return o;
 }
@@ -1857,6 +1872,7 @@ function miRuta_(no, fecha) {
 
 function rutasAdmin_(fecha) {
   rutasTabs_();
+  if (fecha === hoy_() && rows_('Rutas').some(x => fmt_(x.fecha, 'yyyy-MM-dd') === fecha && x.estatus === 'activa')) asegurarTriggerReporte_();
   const rutas = rows_('Rutas').filter(x => fmt_(x.fecha, 'yyyy-MM-dd') === fecha && x.estatus === 'activa').map(x => pickRuta_(x, false)).sort((a, b) => a.num - b.num);
   return { fecha: fecha, rutas: rutas, reporte: reporteGuardado_(fecha), shipday: !!prop_('SHIPDAY_KEY') };
 }
@@ -1873,6 +1889,158 @@ function pickReporte_(r) {
     no_entregados: Number(r.no_entregados), en_orden: Number(r.en_orden), fuera_orden: Number(r.fuera_orden), pct_orden: Number(r.pct_orden),
     tarde: Number(r.tarde), retraso_prom: Number(r.retraso_prom), fin_plan: horaCelda_(r.fin_plan), fin_real: horaCelda_(r.fin_real),
     otros_repartidores: r.otros_repartidores, calificacion: r.calificacion, generado: fmt_(r.generado, 'yyyy-MM-dd HH:mm'), detalle: det };
+}
+
+
+// ── Seguimiento en vivo (Shipday cada 10 min) ──
+
+function limiteDe_(x) { const l = horaCelda_(x.limite); return /^\d{1,2}:\d{2}$/.test(l) ? l : String(config_('RUTA_LIMITE', '23:00')); }
+function segDe_(x) { try { return JSON.parse(x.seg_json || '{}'); } catch (e) { return {}; } }
+const FINAL_ = { entregado: 1, fallido: 1 };
+
+function segResumen_(x) {
+  const seg = segDe_(x);
+  let datos = {}; try { datos = JSON.parse(x.datos_json || '{}'); } catch (e) {}
+  const envios = [].concat.apply([], (datos.paradas || []).map(p => (p.envios || []).map(String)));
+  const ent = envios.filter(n => seg[n] && seg[n].e === 'entregado').length;
+  const fal = envios.filter(n => seg[n] && seg[n].e === 'fallido').length;
+  return { total: envios.length, entregados: ent, fallidos: fal, pendientes: envios.length - ent - fal, limite: limiteDe_(x),
+    fin_estimado: horaCelda_(x.fin_estimado) || horaCelda_(x.fin), estado: x.estado_tiempo || '', retraso_min: Number(x.retraso_min || 0),
+    actualizado: fmt_(x.seg_actualizado, 'HH:mm') };
+}
+
+function seguimientoDetalle_(rutaId) {
+  const x = rows_('Rutas').find(r => r.ruta_id === rutaId);
+  if (!x) throw new Error('Ruta no encontrada');
+  const r = pickRuta_(x, true), seg = segDe_(x);
+  return { ruta_id: rutaId, nombre: r.nombre, num: r.num, seguimiento: r.seguimiento,
+    paradas: (r.paradas || []).map((p, i) => ({ orden: i + 1, eta: p.eta, dir: p.dir, ref: p.ref,
+      envios: (p.envios || []).map(n => ({ envio: String(n), estado: (seg[n] && seg[n].e) || 'pendiente', hora: (seg[n] && seg[n].h) || '', repartidor: (seg[n] && seg[n].r) || '' })) })) };
+}
+
+function notificarOps_(tipo, titulo, mensaje, ref) {
+  rows_('Personal').filter(p => (p.rol === 'patron' || p.rol === 'admin') && p.estatus !== 'baja')
+    .forEach(p => notificar_(String(p.no_empleado), tipo, titulo, mensaje, ref));
+}
+
+/** Trigger cada 10 min. */
+function tareaSeguimientoRutas() {
+  if (!ss_().getSheetByName('Rutas') || !prop_('SHIPDAY_KEY')) return;
+  const h = Number(fmt_(new Date(), 'HH'));
+  if (h < Number(config_('SEGUIMIENTO_DESDE', 8)) || h > Number(config_('SEGUIMIENTO_HASTA', 23))) return;
+  seguimientoRutas_(false);
+}
+
+const hm2min_ = t => { const m = String(t || '').match(/^(\d{1,2}):(\d{2})/); return m ? +m[1] * 60 + +m[2] : null; };
+const min2hm_ = m => { m = Math.round(m); return ('0' + Math.floor(m / 60) % 24).slice(-2) + ':' + ('0' + (m % 60)).slice(-2); };
+function havM_(a, b) { const R = 6371000, t = Math.PI / 180; const x = Math.pow(Math.sin((b[0] - a[0]) * t / 2), 2) + Math.cos(a[0] * t) * Math.cos(b[0] * t) * Math.pow(Math.sin((b[1] - a[1]) * t / 2), 2); return 2 * R * Math.asin(Math.sqrt(x)); }
+
+/**
+ * Revisa en Shipday los envíos pendientes de las rutas activas de hoy, avisa a admins y patrón de entregas y fallos,
+ * y recalcula con tráfico real (TomTom, desde la última entrega) si cada ruta aún acaba antes de su límite.
+ */
+function seguimientoRutas_(forzar) {
+  rutasTabs_();
+  const fecha = hoy_();
+  const rutas = rows_('Rutas').filter(x => fmt_(x.fecha, 'yyyy-MM-dd') === fecha && x.estatus === 'activa');
+  if (!rutas.length) return { rutas: 0 };
+  const cada = Math.max(10, Number(config_('SEGUIMIENTO_MIN', 10)));
+  const ahora = new Date();
+  const nowMin = hm2min_(fmt_(ahora, 'HH:mm'));
+  const datos = {}, pend = [];
+  rutas.forEach(x => {
+    let d = {}; try { d = JSON.parse(x.datos_json || '{}'); } catch (e) {}
+    datos[x.ruta_id] = d;
+    const seg = segDe_(x);
+    const ult = x.seg_actualizado ? new Date(x.seg_actualizado).getTime() : 0;
+    if (!forzar && ahora.getTime() - ult < (cada - 1) * 60000) return;
+    if (hm2min_(horaCelda_(x.salida)) != null && nowMin < hm2min_(horaCelda_(x.salida)) - 15) return;
+    (d.paradas || []).forEach(p => (p.envios || []).forEach(n => { if (!(seg[n] && FINAL_[seg[n].e])) pend.push(String(n)); }));
+  });
+  const sd = pend.length ? shipdayGet_(unicos_(pend)) : {};
+  const recalc = [];
+  const resumen = [];
+  rutas.forEach(x => {
+    const d = datos[x.ruta_id], seg = segDe_(x);
+    const eventos = [];
+    (d.paradas || []).forEach((p, i) => (p.envios || []).forEach(n => {
+      n = String(n);
+      if (!(n in sd)) return;
+      const inf = shipdayInfo_(sd[n]);
+      const nuevo = inf.entregado ? 'entregado' : inf.fallido ? 'fallido' : 'pendiente';
+      const antes = (seg[n] && seg[n].e) || 'pendiente';
+      if (nuevo !== antes) {
+        seg[n] = { e: nuevo, h: inf.entrega ? fmt_(inf.entrega, 'HH:mm') : fmt_(ahora, 'HH:mm'), r: inf.repartidor || '', o: i + 1 };
+        if (nuevo !== 'pendiente') eventos.push({ envio: n, estado: nuevo, parada: i + 1 });
+      }
+    }));
+    const tocado = Object.keys(sd).length && (d.paradas || []).some(p => (p.envios || []).some(n => String(n) in sd));
+    if (!tocado && !forzar) return;
+    // paradas que faltan (alguno de sus envíos sigue pendiente) y punto de partida = la última parada terminada
+    const restantes = [], hechas = [];
+    (d.paradas || []).forEach((p, i) => {
+      const es = (p.envios || []).map(n => (seg[String(n)] && seg[String(n)].e) || 'pendiente');
+      if (es.some(e => e === 'pendiente')) restantes.push(p); else hechas.push({ p: p, h: Math.max.apply(null, (p.envios || []).map(n => hm2min_((seg[String(n)] || {}).h) || 0)) });
+    });
+    hechas.sort((a, b) => b.h - a.h);
+    const origen = hechas.length ? [hechas[0].p.lat, hechas[0].p.lng] : (d.deposito || [19.4182, -99.1369]);
+    const salidaMin = hm2min_(horaCelda_(x.salida));
+    const desde = hechas.length ? nowMin : Math.max(nowMin, salidaMin == null ? nowMin : salidaMin);
+    const ultRec = x.seg_recalculo ? new Date(x.seg_recalculo).getTime() : 0;
+    const necesita = restantes.length && (eventos.length || forzar || ahora.getTime() - ultRec > 25 * 60000 || !x.estado_tiempo);
+    resumen.push({ x: x, seg: seg, eventos: eventos, restantes: restantes, origen: origen, desde: desde, recalcular: !!necesita });
+    if (necesita) recalc.push(resumen[resumen.length - 1]);
+  });
+  recalcularFin_(recalc, ahora);
+  const avisos = [];
+  withLock_(() => resumen.forEach(r => {
+    const x = r.x, lim = hm2min_(limiteDe_(x));
+    const upd = { seg_json: JSON.stringify(r.seg), seg_actualizado: ahora };
+    let estado = x.estado_tiempo || '', retraso = Number(x.retraso_min || 0), fin = horaCelda_(x.fin_estimado);
+    if (!r.restantes.length) { estado = 'terminada'; retraso = 0; fin = min2hm_(Math.max.apply(null, Object.keys(r.seg).map(n => hm2min_(r.seg[n].h) || 0))); }
+    else if (r.finMin != null) { fin = min2hm_(r.finMin); retraso = Math.max(0, Math.round(r.finMin - lim)); estado = r.finMin > lim ? 'tarde' : 'a_tiempo'; upd.seg_recalculo = ahora; }
+    Object.assign(upd, { estado_tiempo: estado, retraso_min: retraso, fin_estimado: fin });
+    update_('Rutas', x._row, upd);
+    const s = segResumen_(Object.assign({}, x, upd));
+    if (r.eventos.length) {
+      const ent = r.eventos.filter(e => e.estado === 'entregado'), fal = r.eventos.filter(e => e.estado === 'fallido');
+      const partes = [];
+      if (ent.length) partes.push('✅ ' + (ent.length === 1 ? 'Entregó ' + ent[0].envio + ' (parada ' + ent[0].parada + ')' : ent.length + ' entregados'));
+      if (fal.length) partes.push('❌ ' + (fal.length === 1 ? 'Fallido ' + fal[0].envio + ' (parada ' + fal[0].parada + ')' : fal.length + ' fallidos'));
+      avisos.push(['ruta_avance', 'Ruta ' + x.num + ' · ' + primerNombre_(x.nombre) + ': ' + partes.join(' · '),
+        'Quedan ' + s.pendientes + ' de ' + s.total + (s.pendientes ? ' · termina aprox ' + s.fin_estimado + (estado === 'tarde' ? ' ⚠️ ' + retraso + ' min tarde' : ' (a tiempo)') : ' · ruta terminada'), x.ruta_id]);
+    }
+    if (estado === 'tarde' && x.estado_tiempo !== 'tarde')
+      avisos.push(['ruta_tarde', '⚠️ Ruta ' + x.num + ' (' + primerNombre_(x.nombre) + ') ya no alcanza',
+        'Con el tráfico actual terminaría a las ' + fin + ', ' + retraso + ' min después de las ' + limiteDe_(x) + '. Le quedan ' + s.pendientes + ' envío(s).', x.ruta_id]);
+    if (estado === 'a_tiempo' && x.estado_tiempo === 'tarde')
+      avisos.push(['ruta_tarde', '👍 Ruta ' + x.num + ' (' + primerNombre_(x.nombre) + ') vuelve a ir a tiempo', 'Termina aprox ' + fin + '.', x.ruta_id]);
+  }));
+  avisos.forEach(a => notificarOps_(a[0], a[1], a[2], a[3]));
+  return { rutas: resumen.length, consultados: unicos_(pend).length, avisos: avisos.length };
+}
+function primerNombre_(n) { return String(n || '').trim().split(/\s+/)[0].replace(/^./, c => c.toUpperCase()); }
+
+/** Tiempo restante de cada ruta: TomTom con tráfico (o estimado si no hay key) + espera de cada parada. */
+function recalcularFin_(list, ahora) {
+  if (!list.length) return;
+  const key = prop_('TOMTOM_KEY');
+  const reqs = list.map(r => {
+    const locs = [r.origen].concat(r.restantes.map(p => [p.lat, p.lng]));
+    const dep = r.desde > hm2min_(fmt_(ahora, 'HH:mm')) + 1 ? fmt_(new Date(ahora.getTime() + (r.desde - hm2min_(fmt_(ahora, 'HH:mm'))) * 60000), "yyyy-MM-dd'T'HH:mm:ss") + '-06:00' : 'now';
+    return { url: 'https://api.tomtom.com/routing/1/calculateRoute/' + locs.slice(0, 140).map(p => Number(p[0]).toFixed(6) + ',' + Number(p[1]).toFixed(6)).join(':') +
+      '/json?key=' + encodeURIComponent(key) + '&traffic=true&routeType=fastest&travelMode=motorcycle&routeRepresentation=summaryOnly&departAt=' + encodeURIComponent(dep), muteHttpExceptions: true, locs: locs };
+  });
+  let res = [];
+  if (key) { try { for (let b = 0; b < reqs.length; b += 5) { res = res.concat(UrlFetchApp.fetchAll(reqs.slice(b, b + 5).map(q => ({ url: q.url, muteHttpExceptions: true })))); if (b + 5 < reqs.length) Utilities.sleep(1100); } } catch (e) { console.warn('tomtom seguimiento', e); res = []; } }
+  list.forEach((r, i) => {
+    let viaje = null;
+    const rr = res[i];
+    if (rr && rr.getResponseCode() === 200) { try { viaje = JSON.parse(rr.getContentText()).routes[0].summary.travelTimeInSeconds / 60; } catch (e) {} }
+    if (viaje == null) { let m = 0; for (let k = 1; k < reqs[i].locs.length; k++) m += havM_(reqs[i].locs[k - 1], reqs[i].locs[k]) * 1.4; viaje = m / (22000 / 60) * 1.4; }
+    const espera = r.restantes.reduce((s, p) => s + Number(p.espera || 10), 0);
+    r.finMin = r.desde + viaje + espera;
+  });
 }
 
 // ── Shipday

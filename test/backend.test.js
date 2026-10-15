@@ -495,4 +495,71 @@ t('roles: patrón (super admin) ve todo; admin solo rutas y reporte; migración 
   ok(call('guardarPersona', { persona: { no_empleado: '4', rol: 'empleado' } }, s1.token));
 });
 
+
+t('seguimiento en vivo: Shipday cada 10 min, push a admins y recálculo de si acaban a tiempo', () => {
+  const { ctx } = env;
+  const calls = [];
+  const resp = (code, obj) => ({ getResponseCode: () => code, getContentText: () => JSON.stringify(obj) });
+  const SD = { 'ML-901': [{ orderId: 1, orderStatus: { orderState: 'STARTED' }, activityLog: {}, assignedCarrier: { name: 'Saidd Lopez' } }],
+    'ML-902': [{ orderId: 2, orderStatus: { orderState: 'STARTED' }, activityLog: {} }], 'ML-903': [{ orderId: 3, orderStatus: { orderState: 'STARTED' }, activityLog: {} }] };
+  let ttSec = 600;
+  const fetchOne = (url, o) => {
+    calls.push(url);
+    if (/fcm\.googleapis/.test(url)) { env.pushes.push(JSON.parse(o.payload).message); return resp(200, {}); }
+    if (/tomtom/.test(url)) return resp(200, { routes: [{ summary: { travelTimeInSeconds: ttSec, lengthInMeters: 5000 } }] });
+    if (/shipday\.com\/orders\//.test(url)) { const n = decodeURIComponent(url.split('/orders/')[1]); return SD[n] ? resp(200, SD[n]) : resp(404, {}); }
+    return resp(404, {});
+  };
+  ctx.UrlFetchApp = { fetch: fetchOne, fetchAll: reqs => reqs.map(r => fetchOne(r.url, r)) };
+  ok(call('guardarPersona', { persona: { no_empleado: '5', rol: 'admin' } }, admin));
+  const ruta = { no_empleado: '92', num: 1, total: 1, salida: '15:00', fin: '16:30', limite: '17:00', km: 10, deposito: [19.4182, -99.1369],
+    paradas: [{ eta: '15:20', envios: ['901'], lat: 19.43, lng: -99.14, espera: 10 }, { eta: '15:50', envios: ['902'], lat: 19.45, lng: -99.15, espera: 10 },
+      { eta: '16:20', envios: ['903'], lat: 19.47, lng: -99.16, espera: 10 }], geom: [] };
+  ok(call('publicarRutas', { fecha: '2026-10-12', rutas: [ruta] }, admin));
+  const rid = ok(call('rutasAdmin', { fecha: '2026-10-12' }, admin)).rutas.find(r => r.no_empleado === '92').ruta_id;
+  // 16:00: nada entregado aún, recálculo inicial desde la base (3 paradas: 10 min viaje + 30 min espera → 16:40, a tiempo)
+  let r = ok(call('seguimientoAhora', {}, admin));
+  let sg = ok(call('rutasAdmin', { fecha: '2026-10-12' }, admin)).rutas.find(x => x.ruta_id === rid).seguimiento;
+  assert.strictEqual(sg.pendientes, 3); assert.strictEqual(sg.estado, 'a_tiempo'); assert.strictEqual(sg.fin_estimado, '16:40'); assert.strictEqual(sg.limite, '17:00');
+  // se entrega una y falla otra → un push con resumen a patrón y admin (#5)
+  SD['ML-901'][0].orderStatus.orderState = 'ALREADY_DELIVERED'; SD['ML-901'][0].activityLog.deliveryTime = '2026-10-12T21:55:00Z';
+  SD['ML-902'][0].orderStatus.orderState = 'FAILED_DELIVERY';
+  const antes = env.pushes.length;
+  ok(call('seguimientoAhora', {}, admin));
+  const b5 = ok(call('bandeja', {}, ok(call('login', { rfc: 'RUCA990909MX1', pin: '135791' })).token));
+  assert(/Ruta 1 · Jonatan: ✅ Entregó 901 \(parada 1\) · ❌ Fallido 902 \(parada 2\)/.test(b5[0].titulo), b5[0].titulo);
+  assert(/Quedan 1 de 3/.test(b5[0].mensaje), b5[0].mensaje);
+  sg = ok(call('rutasAdmin', { fecha: '2026-10-12' }, admin)).rutas.find(x => x.ruta_id === rid).seguimiento;
+  assert.strictEqual(sg.entregados, 1); assert.strictEqual(sg.fallidos, 1); assert.strictEqual(sg.pendientes, 1);
+  // recálculo desde la parada 1 a las 16:00: 10 min + 10 espera = 16:20
+  assert.strictEqual(sg.fin_estimado, '16:20');
+  assert(calls.some(u => /calculateRoute\/19\.450000,-99\.150000:19\.470000,-99\.160000\//.test(u)), 'parte de la última parada visitada (el intento fallido)');
+  // sin cambios: no hay push nuevo
+  const n = env.pushes.length;
+  ok(call('seguimientoAhora', {}, admin));
+  assert.strictEqual(env.pushes.length, n);
+  // con tráfico pesado ya no alcanza → alerta una sola vez
+  ttSec = 3600 * 2;
+  SD['ML-901'][0].activityLog.deliveryTime = '2026-10-12T21:55:00Z';
+  ok(call('seguimientoAhora', {}, admin));
+  sg = ok(call('rutasAdmin', { fecha: '2026-10-12' }, admin)).rutas.find(x => x.ruta_id === rid).seguimiento;
+  assert.strictEqual(sg.estado, 'tarde'); assert.strictEqual(sg.retraso_min, 70);
+  const bP = ok(call('bandeja', {}, admin));
+  assert(bP.some(x => /Ruta 1 \(Jonatan\) ya no alcanza/.test(x.titulo)));
+  const det = ok(call('seguimientoRuta', { ruta_id: rid }, admin));
+  assert.deepStrictEqual(det.paradas.map(p => p.envios[0].estado), ['entregado', 'fallido', 'pendiente']);
+  assert.strictEqual(det.paradas[0].envios[0].hora, '15:55');
+  // el trigger respeta el intervalo: recién revisado → no consulta Shipday
+  const c0 = calls.filter(u => /shipday/.test(u)).length;
+  run('tareaSeguimientoRutas');
+  assert.strictEqual(calls.filter(u => /shipday/.test(u)).length, c0);
+  // termina la ruta
+  SD['ML-903'][0].orderStatus.orderState = 'ALREADY_DELIVERED'; SD['ML-903'][0].activityLog.deliveryTime = '2026-10-12T22:30:00Z';
+  ok(call('seguimientoAhora', {}, admin));
+  sg = ok(call('rutasAdmin', { fecha: '2026-10-12' }, admin)).rutas.find(x => x.ruta_id === rid).seguimiento;
+  assert.strictEqual(sg.estado, 'terminada'); assert.strictEqual(sg.pendientes, 0); assert.strictEqual(sg.fin_estimado, '16:30');
+  fail(call('seguimientoAhora', {}, tok4), /Sin permiso/);
+  ok(call('guardarPersona', { persona: { no_empleado: '5', rol: 'empleado' } }, admin));
+});
+
 console.log(`\n${passed} pruebas OK`);
