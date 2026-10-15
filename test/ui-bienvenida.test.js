@@ -29,7 +29,7 @@ const srv = http.createServer((q, r) => {
   await p.fill('input.input', 'LOAS950505H12'); await click('text=Continuar'); await pin('482915');
   await shot('inicio');
   await click('.welcome'); await shot('bienvenida');
-  await click('text=Ver apps'); await shot('apps-instalar');
+  await click('.topbar .icon-btn'); await click('.tabbar button:has-text("Más")'); await click('.mi:has-text("Apps y accesos")'); await shot('apps-instalar');
   await click('.app-row:has-text("Packatelas") .btn.primary'); await shot('apk-instrucciones', false); await click('.modal .btn:has-text("Cancelar")');
   await click('.app-row:has-text("My Driver") .chk'); await click('.app-row:has-text("Envíos Flex") .chk'); await click('.app-row:has-text("Packatelas") .chk');
   await click('.seg button:has-text("Accesos")'); await shot('apps-accesos');

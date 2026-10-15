@@ -24,7 +24,8 @@ const EMPRESA_DOMICILIO = 'Juan Lucas de Lassaga 54, Piso 1, Col. Obrera, Cuauht
 const SCHEMA = {
   Personal: ['no_empleado', 'nombre', 'rfc', 'curp', 'nss', 'puesto', 'area', 'rol', 'estatus', 'fecha_ingreso',
     'fecha_baja', 'salario_diario', 'clabe', 'banco', 'telefono', 'correo', 'flotilla_id', 'carpeta_docs',
-    'pin_hash', 'pin_intentos', 'pin_bloqueado', 'ultimo_acceso', 'notas', 'onb_rol', 'onb_docs', 'onb_apps', 'shipday_id'],
+    'pin_hash', 'pin_intentos', 'pin_bloqueado', 'ultimo_acceso', 'notas', 'onb_rol', 'onb_docs', 'onb_apps', 'shipday_id',
+    'hora_entrada', 'dias_laborales', 'minutos_comida', 'checadas', 'actualizado'],
   Recibos: ['recibo_id', 'no_empleado', 'nombre', 'periodo', 'desde', 'hasta', 'dias', 'salario_diario',
     'sueldo', 'bonos', 'otras_percepciones', 'desc_faltas', 'desc_retardos', 'desc_cargos', 'desc_adeudos',
     'otras_deducciones', 'total_percepciones', 'total_deducciones', 'neto', 'detalle_json', 'pdf_id', 'estatus',
@@ -192,6 +193,7 @@ const ACTIONS = {
   recordarBienvenida:{ admin: true, fn: recordarBienvenida_ },
   appsAdmin:        { admin: true, fn: () => rows_('Apps').map(pickApp_).sort((a, b) => a.orden - b.orden) },
   guardarApp:       { admin: true, fn: guardarApp_ },
+  siguienteNumero:  { admin: true, fn: () => siguienteNumero_() },
   altasAdmin:       { admin: true, fn: altasAdmin_ },
   resolverAlta:     { admin: true, fn: resolverAlta_ },
   revisarDocumento: { admin: true, fn: revisarDocumento_ },
@@ -229,13 +231,13 @@ function setup() {
   if (!rows_('Apps').length) APPS_DEFAULT.forEach((a, i) => append_('Apps', appRow_(a, i)));
   const r = sincronizarPersonal();
   instalarTriggers();
-  console.log('Listo. Personal: ' + r.nuevos + ' nuevos, ' + r.actualizados + ' nombres actualizados.');
+  console.log('Listo. Personal: ' + r.nuevos + ' nuevos, ' + r.actualizados + ' traídos del kiosco, ' + r.enviados + ' enviados al kiosco.');
 }
 
 function instalarTriggers() {
   ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('tareaFondeadora').timeBased().everyMinutes(5).create();
-  ScriptApp.newTrigger('sincronizarPersonal').timeBased().everyHours(1).create();
+  ScriptApp.newTrigger('sincronizarPersonal').timeBased().everyMinutes(15).create();
   ScriptApp.newTrigger('tareaReporteRutas').timeBased().everyHours(1).create();
   ScriptApp.newTrigger('tareaSeguimientoRutas').timeBased().everyMinutes(10).create();
 }
@@ -261,24 +263,151 @@ function ensureTab_(name, headers) {
   return sh;
 }
 
-/** Agrega a Personal los empleados nuevos del checador y actualiza nombres. Corre cada hora. */
+/**
+ * Base única de empleados: el expediente (Personal) es donde se captura todo, incluido horario y checadas.
+ * La pestaña Empleados del checador se mantiene sola:
+ *  - Al guardar en el portal se copia al momento (empujarEmpleado_).
+ *  - Cada hora se concilian: empleados creados en el kiosco entran a Personal, y si alguien cambió nombre u
+ *    horario en el kiosco, gana el cambio más reciente (columna Actualizado vs actualizado de Personal).
+ */
+const CHECADAS_TODAS = 'ENTRADA,SALIDA_COMIDA,REGRESO_COMIDA,SALIDA';
+const CHECADAS_REPARTIDOR = 'ENTRADA,SALIDA_COMIDA,REGRESO_COMIDA';
+const EMP_CAMPOS = [ // [Personal, Empleados]
+  ['nombre', 'Nombre'], ['checadas', 'Checadas'], ['hora_entrada', 'Hora de entrada'], ['dias_laborales', 'Días laborales'],
+  ['minutos_comida', 'Minutos de comida'], ['fecha_ingreso', 'Fecha de ingreso'],
+];
+
 function sincronizarPersonal() {
   return withLock_(() => {
+    const emp = filasEmpleados_();
+    if (!emp) return { nuevos: 0, actualizados: 0, enviados: 0 };
+    let nuevos = 0, actualizados = 0, enviados = 0;
     const personal = rows_('Personal');
-    let nuevos = 0, actualizados = 0;
-    empleadosChecador_().forEach(e => {
+    emp.filas.forEach(e => {
       const p = personal.find(x => String(x.no_empleado) === e.no);
       if (!p) {
-        append_('Personal', { no_empleado: e.no, nombre: e.nombre, rol: e.no === '1' ? 'patron' : 'empleado', estatus: 'activo',
-          fecha_ingreso: e.ingreso || '', pin_intentos: 0, pin_bloqueado: 'NO' });
+        const nuevo = { no_empleado: e.no, rol: e.no === '1' ? 'patron' : 'empleado', estatus: 'activo', pin_intentos: 0, pin_bloqueado: 'NO', actualizado: e.act || new Date() };
+        EMP_CAMPOS.forEach(([k]) => nuevo[k] = e.v[k]);
+        if (nuevo.fecha_ingreso) nuevo.fecha_ingreso = parseFecha_(nuevo.fecha_ingreso);
+        append_('Personal', nuevo);
         nuevos++;
-      } else if (e.nombre && p.nombre !== e.nombre) {
-        update_('Personal', p._row, { nombre: e.nombre });
+        return;
+      }
+      if (p.estatus === 'baja') return;
+      const pv = valoresPersona_(p);
+      const difiere = EMP_CAMPOS.some(([k]) => normCampo_(k, pv[k]) !== normCampo_(k, e.v[k]));
+      if (!difiere) return;
+      const tP = p.actualizado instanceof Date ? p.actualizado.getTime() : 0;
+      if (tP === 0 || (e.act && e.act.getTime() > tP)) { // nunca se editó en el portal, o el kiosco es más reciente: traer
+        const upd = { actualizado: e.act };
+        EMP_CAMPOS.forEach(([k]) => { if (String(e.v[k]).trim() !== '' || k === 'checadas') upd[k] = k === 'fecha_ingreso' ? parseFecha_(e.v[k]) : e.v[k]; });
+        update_('Personal', p._row, upd);
         actualizados++;
+      } else { // el portal es más reciente: enviar
+        escribirEmpleado_(emp, e, pv);
+        update_('Personal', p._row, { actualizado: new Date() });
+        enviados++;
       }
     });
-    return { nuevos: nuevos, actualizados: actualizados };
+    delete _cache.emp;
+    return { nuevos: nuevos, actualizados: actualizados, enviados: enviados };
   });
+}
+
+/** Si el número ya existe en el kiosco, completa en Personal lo que falte (horario) antes de empujar. */
+function sincronizarDesdeKiosco_(no) {
+  const emp = filasEmpleados_();
+  const e = emp && emp.filas.find(x => x.no === String(no));
+  const p = rows_('Personal').find(x => String(x.no_empleado) === String(no));
+  if (!e || !p) return;
+  const upd = {};
+  EMP_CAMPOS.forEach(([k]) => { if (k !== 'nombre' && String(p[k] == null ? '' : p[k]).trim() === '' && e.v[k]) upd[k] = k === 'fecha_ingreso' ? parseFecha_(e.v[k]) : e.v[k]; });
+  if (Object.keys(upd).length) update_('Personal', p._row, upd);
+}
+
+/** Copia un expediente a la pestaña Empleados (crea el renglón si se dio de alta desde el portal). */
+function empujarEmpleado_(no) {
+  const p = rows_('Personal').find(x => String(x.no_empleado) === String(no));
+  if (!p || p.estatus === 'baja') return false;
+  const emp = filasEmpleados_();
+  if (!emp) return false;
+  const pv = valoresPersona_(p);
+  if (!pv.checadas) pv.checadas = rolBienvenida_(p) === 'repartidor' ? CHECADAS_REPARTIDOR : CHECADAS_TODAS;
+  let e = emp.filas.find(x => x.no === String(no));
+  if (!e) {
+    const fila = emp.h.map(k => k === 'No. empleado' ? String(no) : k === 'Contador' ? 0 : '');
+    const r = emp.sh.getLastRow() + 1;
+    emp.sh.getRange(r, 1, 1, emp.h.length).setNumberFormat('@').setValues([fila.map(String)]);
+    e = { no: String(no), row: r, v: {} };
+  }
+  escribirEmpleado_(emp, e, pv);
+  update_('Personal', p._row, { actualizado: new Date(), checadas: pv.checadas });
+  delete _cache.emp;
+  return true;
+}
+
+function escribirEmpleado_(emp, e, pv) {
+  EMP_CAMPOS.forEach(([k, col]) => {
+    const c = emp.h.indexOf(col);
+    if (c < 0 || String(pv[k] == null ? '' : pv[k]).trim() === '') return; // nunca borra lo que ya tiene el kiosco
+    const val = k === 'fecha_ingreso' ? (pv[k] ? parseFecha_(pv[k]) : '') : String(pv[k] == null ? '' : pv[k]);
+    emp.sh.getRange(e.row, c + 1).setNumberFormat('@').setValue(val);
+  });
+  const ca = emp.h.indexOf('Actualizado');
+  if (ca >= 0) emp.sh.getRange(e.row, ca + 1).setNumberFormat('@').setValue(now_());
+}
+
+function valoresPersona_(p) {
+  const v = {};
+  EMP_CAMPOS.forEach(([k]) => v[k] = p[k] == null ? '' : p[k]);
+  v.fecha_ingreso = fmt_(p.fecha_ingreso, 'yyyy-MM-dd');
+  v.hora_entrada = horaTexto_(p.hora_entrada);
+  v.minutos_comida = p.minutos_comida === '' || p.minutos_comida == null ? '' : String(Number(p.minutos_comida));
+  return v;
+}
+
+function normCampo_(k, v) {
+  if (k === 'fecha_ingreso') return parseFecha_(v) || '';
+  if (k === 'hora_entrada') return horaTexto_(v);
+  if (k === 'minutos_comida') return v === '' || v == null ? '' : String(Number(v));
+  if (k === 'dias_laborales' || k === 'checadas') return String(v || '').toUpperCase().replace(/\s+/g, '');
+  return String(v == null ? '' : v).trim().replace(/\s+/g, ' ');
+}
+
+/** '9:00', Date de Sheets o '09:00:00' → '9:00' */
+function horaTexto_(v) {
+  if (v === '' || v == null) return '';
+  const m = parseHora_(v);
+  return m == null ? String(v) : Math.floor(m / 60) + ':' + ('0' + Math.floor(m % 60)).slice(-2);
+}
+
+/** Renglones de Empleados con sus valores como texto y la fecha de Actualizado. */
+function filasEmpleados_() {
+  const sh = ss_().getSheetByName('Empleados');
+  if (!sh) return null;
+  const last = sh.getLastRow(), lc = sh.getLastColumn();
+  if (lc < 1) return null;
+  const rng = sh.getRange(1, 1, Math.max(last, 1), lc);
+  const disp = rng.getDisplayValues(), val = rng.getValues();
+  const h = disp[0].map(x => String(x).trim());
+  const iNo = h.indexOf('No. empleado'), iAct = h.indexOf('Actualizado');
+  const filas = [];
+  for (let i = 1; i < disp.length; i++) {
+    const no = String(disp[i][iNo] || '').trim();
+    if (!no) continue;
+    const v = {};
+    EMP_CAMPOS.forEach(([k, col]) => { const c = h.indexOf(col); v[k] = c >= 0 ? String(disp[i][c]).trim() : ''; });
+    v.nombre = v.nombre.replace(/\s+/g, ' ');
+    let act = iAct >= 0 ? val[i][iAct] : '';
+    act = act instanceof Date ? act : parseFechaHora_(act);
+    filas.push({ no: no, row: i + 1, v: v, act: act });
+  }
+  return { sh: sh, h: h, filas: filas };
+}
+
+function parseFechaHora_(s) {
+  const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6] || 0)) : null;
 }
 
 // ───────────────────────── Sesión y seguridad ─────────────────────────
@@ -1562,6 +1691,8 @@ function resolverAlta_(req, u) {
     });
     try { DriveApp.getFolderById(a.folder_id).setTrashed(true); } catch (e) {}
     update_('Altas', a._row, { estatus: 'aprobada', no_empleado: no, fecha_resolucion: new Date(), resuelta_por: u.nombre, notas: req.comentario || '' });
+    sincronizarDesdeKiosco_(no);
+    empujarEmpleado_(no);
     bitacora_(u.no_empleado, 'aprobar_alta', 'Altas', a.alta_id, no);
     return { a: a, ok: true, no: no };
   });
@@ -1641,6 +1772,9 @@ function personalAdmin_() {
       flotilla_id: p.flotilla_id, shipday_id: String(p.shipday_id || ''), notas: p.notas, tiene_pin: !!p.pin_hash, bloqueado: p.pin_bloqueado === 'SI',
       ultimo_acceso: fmt_(p.ultimo_acceso, 'yyyy-MM-dd HH:mm'), push: disp.indexOf(String(p.no_empleado)) >= 0,
       en_checador: !!e.no, horario: e.no ? { entrada: e.entrada, dias: e.diasTxt, comida: e.comida } : null, celular_checador: !!e.celular,
+      hora_entrada: horaTexto_(p.hora_entrada) || e.entrada || '', dias_laborales: String(p.dias_laborales || e.diasTxt || ''),
+      minutos_comida: p.minutos_comida === '' || p.minutos_comida == null ? (e.no ? e.comida : '') : Number(p.minutos_comida),
+      checadas: String(p.checadas || e.checadas || ''),
       docs_por_revisar: rows_('DocsEmpleado').filter(d => d.owner === 'E:' + p.no_empleado && d.estatus === 'subido').length,
       bienvenida: p.estatus === 'baja' ? null : (b => ({ hechos: b.hechos, total: b.total, completa: b.completa }))(bienvenida_(p.no_empleado)),
     };
@@ -1648,7 +1782,9 @@ function personalAdmin_() {
 }
 
 const CAMPOS_EDITABLES = ['nombre', 'rfc', 'curp', 'nss', 'puesto', 'area', 'rol', 'estatus', 'fecha_ingreso', 'fecha_baja', 'salario_diario',
-  'clabe', 'banco', 'telefono', 'correo', 'flotilla_id', 'shipday_id', 'notas'];
+  'clabe', 'banco', 'telefono', 'correo', 'flotilla_id', 'shipday_id', 'notas', 'hora_entrada', 'dias_laborales', 'minutos_comida', 'checadas'];
+const DIAS_VALIDOS = ['L', 'M', 'MI', 'J', 'V', 'S', 'D'];
+const CHECADAS_VALIDAS = ['ENTRADA', 'SALIDA_COMIDA', 'REGRESO_COMIDA', 'SALIDA'];
 
 function guardarPersona_(req, u) {
   return withLock_(() => {
@@ -1663,6 +1799,19 @@ function guardarPersona_(req, u) {
     if (upd.salario_diario !== undefined) upd.salario_diario = num_(upd.salario_diario);
     if (upd.fecha_ingreso) upd.fecha_ingreso = parseFecha_(upd.fecha_ingreso);
     if (upd.fecha_baja) upd.fecha_baja = parseFecha_(upd.fecha_baja);
+    if (upd.hora_entrada) { if (!/^([01]?\d|2[0-3]):[0-5]\d(:\d\d)?$/.test(String(upd.hora_entrada))) throw new Error('Hora de entrada inválida (usa 9:00)'); upd.hora_entrada = horaTexto_(upd.hora_entrada); }
+    if (upd.dias_laborales !== undefined) {
+      const ds = String(upd.dias_laborales).toUpperCase().split(/[,\s]+/).filter(String);
+      if (ds.some(x => DIAS_VALIDOS.indexOf(x) < 0)) throw new Error('Días laborales inválidos');
+      upd.dias_laborales = DIAS_VALIDOS.filter(x => ds.indexOf(x) >= 0).map(x => x === 'MI' ? 'Mi' : x).join(',');
+    }
+    if (upd.minutos_comida !== undefined && upd.minutos_comida !== '') { const n = Number(upd.minutos_comida); if (!(n >= 0 && n <= 240)) throw new Error('Minutos de comida inválidos'); upd.minutos_comida = n; }
+    if (upd.checadas !== undefined) {
+      const cs = String(upd.checadas).toUpperCase().split(/[,\s]+/).filter(String);
+      if (!cs.length || cs.some(x => CHECADAS_VALIDAS.indexOf(x) < 0)) throw new Error('Elige qué checadas le tocan');
+      upd.checadas = CHECADAS_VALIDAS.filter(x => cs.indexOf(x) >= 0).join(',');
+    }
+    upd.actualizado = new Date();
     const todos = rows_('Personal');
     if (upd.rfc) { const dup = todos.find(x => normRfc_(x.rfc) === upd.rfc && String(x.no_empleado) !== String(d.no_empleado)); if (dup) throw new Error('Ese RFC ya es de ' + dup.nombre); }
     if (upd.clabe) { const dup = todos.find(x => String(x.clabe) === upd.clabe && String(x.no_empleado) !== String(d.no_empleado)); if (dup) throw new Error('Esa CLABE ya es de ' + dup.nombre); }
@@ -1674,9 +1823,16 @@ function guardarPersona_(req, u) {
       if (String(p.no_empleado) === u.no_empleado && upd.rol && upd.rol !== 'patron') throw new Error('No puedes quitarte el rol de patrón a ti mismo');
       update_('Personal', p._row, upd);
     }
+    empujarEmpleado_(String(d.no_empleado).trim());
     bitacora_(u.no_empleado, 'guardar_persona', 'Personal', d.no_empleado, Object.keys(upd).join(','));
     return true;
   });
+}
+
+/** Siguiente número libre (para dar de alta desde el portal). */
+function siguienteNumero_() {
+  const nums = rows_('Personal').map(p => Number(p.no_empleado)).concat((filasEmpleados_() || { filas: [] }).filas.map(e => Number(e.no))).filter(n => n > 0);
+  return String((nums.length ? Math.max.apply(null, nums) : 0) + 1);
 }
 
 /** Dígito verificador de CLABE (pesos 3,7,1). */

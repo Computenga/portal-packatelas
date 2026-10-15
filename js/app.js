@@ -1086,7 +1086,7 @@ async function personaView(p) {
       } }, h('span', {}, '🔑'), 'Reset PIN')),
     !nuevo && p.estatus !== 'baja' && [section('Bienvenida'), bienvenidaAdminBox(p), section('Documentos'), docsAdminBox(p)],
     section('Identificación'),
-    nuevo && inp('no_empleado', 'No. de empleado', { inputmode: 'numeric' }),
+    nuevo && inp('no_empleado', 'No. de empleado (el mismo del checador)', { inputmode: 'numeric' }),
     inp('nombre', 'Nombre completo'),
     h('div', { class: 'grid2' }, inp('rfc', 'RFC', { autocapitalize: 'characters', maxlength: 13, class: 'input mono' }), inp('curp', 'CURP', { autocapitalize: 'characters', maxlength: 18, class: 'input mono' })),
     h('div', { class: 'grid2' }, inp('nss', 'NSS', { inputmode: 'numeric', maxlength: 11 }), inp('telefono', 'Teléfono', { inputmode: 'tel' })),
@@ -1096,6 +1096,9 @@ async function personaView(p) {
     h('div', { class: 'grid2' }, inp('fecha_ingreso', 'Fecha de ingreso', { type: 'date' }), inp('salario_diario', 'Salario diario', { type: 'number', inputmode: 'decimal', step: '0.01' })),
     h('div', { class: 'grid2' }, inp('clabe', 'CLABE (18 dígitos)', { inputmode: 'numeric', maxlength: 18, class: 'input mono' }), inp('banco', 'Banco')),
     h('p', { class: 'muted tiny' }, 'Con la CLABE se reconocen sus depósitos de Fondeadora automáticamente.'),
+    section('Horario y checador'),
+    horarioCampos(p, f),
+    h('p', { class: 'muted tiny' }, 'Se copia solo al kiosco del checador. En el kiosco ya solo registras su celular.'),
     h('div', { class: 'grid2' }, inp('flotilla_id', 'ID en la flotilla (ej. U-004)', { autocapitalize: 'characters' }), inp('shipday_id', 'ID(s) de repartidor en Shipday (separados por coma)')),
     section('Acceso'),
     h('div', { class: 'grid2' }, sel('rol', 'Rol', [['empleado', 'Empleado'], ['admin', 'Admin (rutas y reporte)'], ['patron', 'Patrón (super admin)']]), sel('estatus', 'Estatus', [['activo', 'Activo'], ['baja', 'Baja']])),
@@ -1107,6 +1110,37 @@ async function personaView(p) {
       try { await busy('Guardando…', () => api('guardarPersona', { persona })); toast('Guardado', 'ok'); go('personal'); } catch (e) { toast(e.message, 'error', 5000); }
     } }, 'Guardar'));
   screen(nuevo ? 'Nuevo empleado' : 'Expediente', body, { back: () => go('personal') });
+  if (nuevo) api('siguienteNumero').then(n => { if (!f.no_empleado.value) f.no_empleado.value = n; }).catch(() => {});
+}
+
+/** Hora de entrada, días, comida y checadas; agrega a f objetos con .value para que el guardado los lea igual que inputs. */
+function horarioCampos(p, f) {
+  const DIAS = [['L', 'Lun'], ['M', 'Mar'], ['Mi', 'Mié'], ['J', 'Jue'], ['V', 'Vie'], ['S', 'Sáb'], ['D', 'Dom']];
+  const CHK = [['ENTRADA', 'Entrada'], ['SALIDA_COMIDA', 'Salir a comer'], ['REGRESO_COMIDA', 'Regresar de comer'], ['SALIDA', 'Salida']];
+  const PRESETS = { Oficina: ['ENTRADA', 'SALIDA_COMIDA', 'REGRESO_COMIDA', 'SALIDA'], Repartidor: ['ENTRADA', 'SALIDA_COMIDA', 'REGRESO_COMIDA'], Campo: ['ENTRADA', 'SALIDA'] };
+  const norm = x => x.toUpperCase() === 'MI' ? 'Mi' : x.toUpperCase();
+  const dias = new Set(String(p.dias_laborales || '').split(/[,\s]+/).filter(String).map(norm));
+  const esRep = /repart/i.test(p.puesto || '');
+  const chk = new Set(String(p.checadas || '').split(',').filter(String));
+  if (!chk.size) (esRep ? PRESETS.Repartidor : PRESETS.Oficina).forEach(c => chk.add(c));
+  if (!dias.size && !p.no_empleado) ['L', 'M', 'Mi', 'J', 'V', 'S'].forEach(d => dias.add(d));
+  const hora = h('input', { class: 'input', type: 'time', value: p.hora_entrada ? String(p.hora_entrada).padStart(5, '0') : '' });
+  const comida = h('input', { class: 'input', type: 'number', inputmode: 'numeric', min: 0, max: 240, value: p.minutos_comida ?? (p.no_empleado ? '' : 60), placeholder: '60' });
+  const diasBox = h('div', { class: 'chips wrap' }), chkBox = h('div', { class: 'chips wrap' }), preBox = h('div', { class: 'row wrap gap4', style: 'margin-bottom:6px' });
+  const draw = () => {
+    fill(diasBox, DIAS.map(([k, l]) => h('button', { class: 'chip ' + (dias.has(k) ? 'on' : ''), onclick: () => { dias.has(k) ? dias.delete(k) : dias.add(k); draw(); } }, l)));
+    fill(chkBox, CHK.map(([k, l]) => h('button', { class: 'chip ' + (chk.has(k) ? 'on' : ''), onclick: () => { chk.has(k) ? chk.delete(k) : chk.add(k); draw(); } }, l)));
+    fill(preBox, h('span', { class: 'muted tiny' }, 'Atajos:'), Object.entries(PRESETS).map(([n, l]) => h('button', { class: 'chip sm' + (l.length === chk.size && l.every(c => chk.has(c)) ? ' on' : ''), onclick: () => { chk.clear(); l.forEach(c => chk.add(c)); draw(); } }, n)));
+  };
+  draw();
+  f.hora_entrada = { get value() { return hora.value ? hora.value.replace(/^0(\d)/, '$1') : ''; } };
+  f.minutos_comida = comida;
+  f.dias_laborales = { get value() { return DIAS.map(d => d[0]).filter(d => dias.has(d)).join(','); } };
+  f.checadas = { get value() { return CHK.map(c => c[0]).filter(c => chk.has(c)).join(','); } };
+  return h('div', {},
+    h('div', { class: 'grid2' }, h('div', {}, h('label', { class: 'label' }, 'Hora de entrada'), hora), h('div', {}, h('label', { class: 'label' }, 'Minutos de comida'), comida)),
+    h('label', { class: 'label' }, 'Días que trabaja'), diasBox,
+    h('label', { class: 'label' }, 'Checadas que le tocan'), preBox, chkBox);
 }
 
 function bienvenidaAdminBox(p) {

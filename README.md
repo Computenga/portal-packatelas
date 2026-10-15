@@ -17,7 +17,7 @@ App web instalable (PWA) para empleados y patrón: asistencia del checador, reci
 | Pagos | Correos "Transferencia exitosa" de Fondeadora en Gmail, revisados cada 5 min |
 | Push | Firebase, el mismo proyecto `flotilla-packatelas` |
 
-"Personal" es el expediente de RH (RFC, CLABE, salario, PIN cifrado). Está separado de "Empleados" del checador a propósito: si borras a alguien en el kiosco, no se pierde su historial de nómina. Los empleados nuevos del checador se copian solos a Personal cada hora.
+**Base única de empleados:** todo se captura en el expediente del portal (pestaña *Personal*): datos, nómina, horario, días, minutos de comida y checadas. La pestaña *Empleados* del checador se llena sola: al guardar en el portal se copia al momento (y si el número es nuevo, se crea su renglón para que en el kiosco solo registres su celular). Cada 15 min se concilian: quien se dé de alta en el kiosco entra a Personal, y si alguien cambia nombre u horario en el kiosco gana el cambio más reciente. Si borras a alguien en el kiosco no se vuelve a crear y su historial de nómina se conserva en Personal.
 
 ## Instalación (una sola vez)
 

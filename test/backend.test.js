@@ -579,4 +579,44 @@ t('seguimiento en vivo: Shipday cada 10 min, push a admins y recálculo de si ac
   ok(call('guardarPersona', { persona: { no_empleado: '5', rol: 'empleado' } }, admin));
 });
 
+t('base única: Personal manda y Empleados del checador se llena solo', () => {
+  const E = () => { const h = empleados.data[0]; return no => { const r = empleados.data.find(x => String(x[0]) === no); return r && Object.fromEntries(h.map((k, i) => [k, r[i] instanceof Date ? r[i].toISOString().slice(0, 10) : String(r[i] ?? '')])); }; };
+  const per = () => maestro.getSheetByName('Personal');
+  const P = no => { const h = per().data[0]; const r = per().data.find(x => String(x[0]) === no); return Object.fromEntries(h.map((k, i) => [k, r[i]])); };
+  // 1) migración: horario del kiosco pasa a Personal
+  run('sincronizarPersonal');
+  assert.strictEqual(P('92').hora_entrada, '10:00');
+  assert.strictEqual(P('92').dias_laborales, 'L,M,Mi,J,V,S');
+  // 2) cambio en el portal → Empleados al momento
+  ok(call('guardarPersona', { persona: { no_empleado: '92', hora_entrada: '9:30', dias_laborales: 'L,M,MI,J,V', minutos_comida: 45, checadas: 'ENTRADA,SALIDA' } }, admin));
+  let e = E()('92');
+  assert.deepStrictEqual([e['Hora de entrada'], e['Días laborales'], e['Minutos de comida'], e['Checadas']], ['9:30', 'L,M,Mi,J,V', '45', 'ENTRADA,SALIDA']);
+  assert(e['Actualizado']);
+  fail(call('guardarPersona', { persona: { no_empleado: '92', hora_entrada: '25:99' } }, admin), /Hora/);
+  fail(call('guardarPersona', { persona: { no_empleado: '92', checadas: '' } }, admin), /checadas/);
+  // el cálculo de asistencia usa el horario nuevo
+  const a = ok(call('asistenciaDe', { no_empleado: '92', periodo: '2026-10-1' }, admin));
+  assert.strictEqual(a.horario.entrada, '9:30');
+  // la sincronización no regresa el valor viejo
+  run('sincronizarPersonal');
+  assert.strictEqual(E()('92')['Hora de entrada'], '9:30');
+  // 3) alta desde el portal → aparece en el kiosco con checadas según puesto
+  const n = ok(call('siguienteNumero', {}, admin));
+  ok(call('guardarPersona', { persona: { no_empleado: n, nombre: 'Pedro Nuevo Ruiz', puesto: 'Repartidor', hora_entrada: '8:00', dias_laborales: 'L,M,Mi,J,V,S' } }, admin));
+  e = E()(n);
+  assert(e, 'se creó en Empleados');
+  assert.strictEqual(e['Nombre'], 'Pedro Nuevo Ruiz');
+  assert.strictEqual(e['Checadas'], 'ENTRADA,SALIDA_COMIDA,REGRESO_COMIDA');
+  // 4) alguien cambia el nombre en el kiosco después → gana el kiosco
+  const row = empleados.data.find(x => String(x[0]) === n);
+  row[1] = 'Pedro Nuevo Ruiz Hernández';
+  row[empleados.data[0].indexOf('Actualizado')] = '2099-01-01 10:00:00';
+  run('sincronizarPersonal');
+  assert.strictEqual(P(n).nombre, 'Pedro Nuevo Ruiz Hernández');
+  // 5) baja en el kiosco (renglón borrado) no se vuelve a crear
+  empleados.data.splice(empleados.data.indexOf(row), 1);
+  run('sincronizarPersonal');
+  assert(!E()(n));
+});
+
 console.log(`\n${passed} pruebas OK`);

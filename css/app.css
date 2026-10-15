@@ -417,3 +417,4 @@ td .badge { margin: 1px 0; }
 .map-dep div { width: 26px; height: 26px; border-radius: 6px; background: #111; color: #fff; font: 700 13px/26px system-ui, sans-serif; text-align: center; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
 .gap8 { gap: 8px; }
 .b-muted { background: var(--line); color: var(--muted); }
+.chip.sm { padding: 4px 10px; font-size: 0.78rem; }
