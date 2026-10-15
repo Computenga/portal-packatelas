@@ -51,8 +51,8 @@ const hav = (a, b) => { const R = 6371000, t = Math.PI / 180; const x = Math.sin
   await p.waitForFunction(() => /configurado/.test(document.getElementById('keysState').textContent));
   await p.setInputFiles('#file', XLSX_FILE);
   await p.waitForTimeout(800);
-  await p.fill('#drivers', '4'); await p.dispatchEvent('#drivers', 'change');
-  await p.fill('#small', '2'); await p.dispatchEvent('#small', 'change');
+  await p.fill('#big', '5'); await p.dispatchEvent('#big', 'change');
+  await p.fill('#small', '3'); await p.dispatchEvent('#small', 'change');
   await p.fill('#tStart', '15:00'); await p.fill('#tEnd', '21:00');
   await p.click('#run');
   await p.waitForSelector('select[data-emp]', { timeout: 120000 });
@@ -62,7 +62,9 @@ const hav = (a, b) => { const R = 6371000, t = Math.PI / 180; const x = Math.sin
   await p.waitForTimeout(500);
   await p.screenshot({ path: OUT + '/t01-ruteador.png', fullPage: false });
   const info = await p.evaluate(() => { const R = window.__ruteador; const sc = R.currentSched(); const bad = new Set(R.S.result.restrList.map(x => x.st));
-    return { chicas: sc.filter(r => r.chica).length, restr: bad.size, viol: sc.filter(r => r.chica).reduce((a, r) => a + r.stops.filter(o => bad.has(o.st)).length, 0), rutas: sc.length }; });
+    return { chicas: sc.filter(r => r.chica).length, restr: bad.size, viol: sc.filter(r => r.chica).reduce((a, r) => a + r.stops.filter(o => bad.has(o.st)).length, 0), rutas: sc.length,
+      chicasFueraCDMX: sc.filter(r => r.chica).reduce((a, r) => a + r.stops.filter(o => o.st.estado !== 'CDMX').length, 0),
+      mezcladas: sc.filter(r => new Set(r.stops.map(o => o.st.estado)).size > 1).length, zonas: sc.map(r => (r.chica ? 'C ' : 'G ') + r.zona + ' ' + Math.round(r.durMin) + 'min') }; });
   console.log('motos chicas:', JSON.stringify(info));
   await p.click('#pubBtn');
   await p.waitForTimeout(1500);

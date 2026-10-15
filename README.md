@@ -111,8 +111,10 @@ node test/ui.test.js carpeta  # recorre la app en modo demo y toma capturas
 
 - Cada 5 min se guarda en *GpsLog* la última ubicación conocida de cada repartidor (`/carriers`). Sin alertas. Más → GPS de Shipday muestra por repartidor qué tan seguido cambia y las paradas de 15+ min (detenido / sin señal / en la base). Se apaga con `GPS_PRUEBA = NO`.
 
-## Motos chicas (ruteador)
+## Flota y zonas (ruteador)
 
-- En el ruteador: *Motos chicas*, *Altitud máx.* (m arriba de la base) y *% más lento* sin vías rápidas.
-- Paradas solo para moto grande: más altas que la base + altitud máx. (Open-Meteo) o que solo se alcanzan por autopista / carriles centrales, o con un rodeo grande sin ellas (TomTom, `avoid=motorways`; resultado guardado 30 días en *AlcanceMoto*).
-- Las rutas de moto chica usan su propia matriz y TomTom les calcula el recorrido evitando autopistas y casetas. Se marcan con 🛵 en la tabla, el ticket y WhatsApp.
+- *Motos grandes* + *Motos chicas* = repartidores disponibles.
+- *Motos chicas pueden ir a*: solo CDMX (las del Edo. Méx. quedan para motos grandes) o CDMX y Edo. Méx. El estado sale de la columna Estado del Excel o, si no viene, del nombre de la alcaldía.
+- Opcionales para chicas: evitar cerros (más de N m arriba de la base, Open-Meteo) y evitar autopistas / carriles centrales (TomTom `avoid=motorways`, guardado 30 días en *AlcanceMoto*).
+- *Agrupar rutas por* estado o alcaldía/municipio: cada cambio de zona dentro de una ruta le cuesta al optimizador los minutos de *fuerza de agrupación* (no se suman al horario real), así salen rutas de pura CDMX, puro Edo. Méx. o por alcaldía.
+- Si faltan repartidores, los que se agregan son de moto grande. Tabla, ticket, WhatsApp y Excel muestran moto y zona de cada ruta.

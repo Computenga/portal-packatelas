@@ -141,16 +141,25 @@ details.route li span{color:var(--muted)}
         <div><label>Hora máxima de término</label><input type="time" id="tEnd" value="19:00"></div>
       </div>
       <div class="row3">
-        <div><label>Repartidores</label><input type="number" id="drivers" min="1" value="5"></div>
+        <div><label>Motos grandes</label><input type="number" id="big" min="0" value="5"></div>
+        <div><label>Motos chicas</label><input type="number" id="small" min="0" value="0"></div>
+        <div><label>Total</label><input type="text" id="totalMotos" value="5 repartidores" disabled></div>
+      </div>
+      <div class="row">
+        <div><label>Motos chicas pueden ir a</label><select id="smallZone"><option value="cdmx">Solo CDMX</option><option value="todo">CDMX y Edo. Méx.</option></select></div>
+        <div><label>Agrupar rutas por</label><select id="grp"><option value="estado">Estado (CDMX / Edo. Méx.)</option><option value="alcaldia">Alcaldía / municipio</option><option value="">Sin agrupar</option></select></div>
+      </div>
+      <label class="check"><input type="checkbox" id="altOn" checked>Motos chicas evitan cerros: más de <input type="number" id="altMax" min="0" step="10" value="120" style="width:70px;margin:0 4px;padding:3px 5px"> m arriba de la base</label>
+      <label class="check"><input type="checkbox" id="motoOn" checked>Motos chicas evitan autopistas y carriles centrales (TomTom)</label>
+      <div class="row">
+        <div><label>Moto chica: % más lento</label><input type="number" id="smallPen" min="0" step="5" value="15"></div>
+        <div><label>Fuerza de agrupación (min)</label><input type="number" id="grpPen" min="0" step="5" value="20"></div>
+      </div>
+      <div class="hint">Las motos grandes cubren el Edo. Méx. y lo que las chicas no pueden. “Agrupar” evita que una ruta brinque entre zonas: cada cambio de zona le cuesta al optimizador los minutos de “fuerza” (no se suman al horario real).</div>
+      <div class="row">
         <div><label>Espera/parada</label><input type="number" id="wait" min="0" value="10"></div>
         <div><label>+min/envío extra</label><input type="number" id="extra" min="0" value="2"></div>
       </div>
-      <div class="row3">
-        <div><label>Motos chicas</label><input type="number" id="small" min="0" value="0"></div>
-        <div><label>Altitud máx. (m)</label><input type="number" id="altMax" min="0" step="10" value="120"></div>
-        <div><label>% más lento</label><input type="number" id="smallPen" min="0" step="5" value="15"></div>
-      </div>
-      <div class="hint">Motos chicas: no van por autopistas ni carriles centrales (lo decide TomTom) ni a paradas que estén más de “Altitud máx.” metros arriba de la base (cerros). “% más lento” = cuánto se tardan más por calles sin vías rápidas.</div>
       <div class="hint">La espera es en minutos. “+min/envío extra” se suma cuando una parada tiene varios envíos.</div>
     </div>
 
@@ -405,21 +414,23 @@ function suggestedFactor(hour){
 function refreshFactor(){if(S.factorTouched)return;const h=parseInt(($('tStart').value||'10').split(':')[0]);$('factor').value=suggestedFactor(h);}
 function readCfg(){
   const date=$('date').value;const start=new Date(`${date}T${$('tStart').value}:00`),end=new Date(`${date}T${$('tEnd').value}:00`);
-  return{date,start,end,K:Math.max(1,parseInt($('drivers').value)||1),wait:Math.max(0,parseFloat($('wait').value)||0),extra:Math.max(0,parseFloat($('extra').value)||0),
-    group:$('group').checked,factor:parseFloat($('factor').value)||1.5,adj:parseFloat($('adj').value)||1,small:Math.max(0,parseInt($('small').value)||0),altMax:Math.max(0,parseFloat($('altMax').value)||120),smallPen:Math.max(0,parseFloat($('smallPen').value)||0)/100,useTT:!!(S.srv&&S.srv.tomtom),ttMode:$('ttMode').value,
+  return{date,start,end,K:Math.max(1,(parseInt($('big').value)||0)+(parseInt($('small').value)||0)),big:Math.max(0,parseInt($('big').value)||0),wait:Math.max(0,parseFloat($('wait').value)||0),extra:Math.max(0,parseFloat($('extra').value)||0),
+    group:$('group').checked,factor:parseFloat($('factor').value)||1.5,adj:parseFloat($('adj').value)||1,small:Math.max(0,parseInt($('small').value)||0),smallZone:$('smallZone').value,grp:$('grp').value,grpPen:Math.max(0,parseFloat($('grpPen').value)||0)*60,altOn:$('altOn').checked,motoOn:$('motoOn').checked,altMax:Math.max(0,parseFloat($('altMax').value)||120),smallPen:Math.max(0,parseFloat($('smallPen').value)||0)/100,useTT:!!(S.srv&&S.srv.tomtom),ttMode:$('ttMode').value,
     ms:parseInt($('quality').value)||4000,pw:Math.min(80,Math.max(40,parseFloat($('pw').value)||72)),fs:parseFloat($('fs').value)||1.15,skipDone:$('skipDone').checked,depot:{lat:parseFloat($('dLat').value),lng:parseFloat($('dLng').value)}};
 }
-const PERSIST=['tStart','tEnd','drivers','wait','extra','ttMode','adj','quality','pw','fs','small','altMax','smallPen'];
+const PERSIST=['tStart','tEnd','big','wait','extra','ttMode','adj','quality','pw','fs','small','altMax','smallPen','smallZone','grp','grpPen'];
 function loadSettings(){
-  PERSIST.forEach(id=>{const v=store.get('f.'+id,null);if(v!==null)$(id).value=v;});
-  ['group','skipDone'].forEach(id=>{const v=store.get('f.'+id,null);if(v!==null)$(id).checked=v;});
+  PERSIST.forEach(id=>{const v=store.get('f.'+id,null);if(v!==null&&$(id))$(id).value=v;});
+  ['group','skipDone','altOn','motoOn'].forEach(id=>{const v=store.get('f.'+id,null);if(v!==null)$(id).checked=v;});
   const d=store.get('depot',DEFAULT_DEPOT);$('dLat').value=d.lat.toFixed(6);$('dLng').value=d.lng.toFixed(6);
   const t=new Date();$('date').value=`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
   refreshFactor();
 }
+function totalMotos(){const b=parseInt($('big').value)||0,c=parseInt($('small').value)||0;$('totalMotos').value=(b+c)+' repartidor'+(b+c===1?'':'es');}
 function bindSettings(){
+  ['big','small'].forEach(id=>$(id).addEventListener('input',totalMotos));setTimeout(totalMotos,0);
   PERSIST.forEach(id=>$(id).addEventListener('change',()=>store.set('f.'+id,$(id).value)));
-  ['group','skipDone'].forEach(id=>$(id).addEventListener('change',()=>store.set('f.'+id,$(id).checked)));
+  ['group','skipDone','altOn','motoOn'].forEach(id=>$(id).addEventListener('change',()=>store.set('f.'+id,$(id).checked)));
   $('tStart').addEventListener('change',refreshFactor);
   $('factor').addEventListener('input',()=>{S.factorTouched=true;});
   ['dLat','dLng'].forEach(id=>$(id).addEventListener('change',()=>setDepot(parseFloat($('dLat').value),parseFloat($('dLng').value))));
@@ -495,6 +506,16 @@ function fmtCompromiso(v){
 }
 const DONE_STATES=/^(delivered|cancelled|canceled|entregado|cancelado|not_delivered)$/i;
 const cell=(r,i)=>{if(i<0)return'';const v=String(r[i]??'').trim();return v==='-'?'':v;};
+const ALCALDIAS=['alvaroobregon','azcapotzalco','benitojuarez','coyoacan','cuajimalpa','cuajimalpademorelos','cuauhtemoc','gustavoamadero','gam','iztacalco','iztapalapa','magdalenacontreras','lamagdalenacontreras','miguelhidalgo','miltaalta','milpaalta','tlahuac','tlalpan','venustianocarranza','xochimilco'];
+/** CDMX o Edo. Méx. según la columna Estado; si no viene, por el nombre de la alcaldía. */
+function zonaDe(p){
+  const e=norm(p.edo),c=norm(p.city);
+  let estado='';
+  if(/cdmx|distritofederal|ciudaddemexico|^df$/.test(e))estado='CDMX';
+  else if(/estadodemexico|edomex|edomex|^mexico$/.test(e))estado='Edo. Méx.';
+  else if(c)estado=ALCALDIAS.includes(c)?'CDMX':'Edo. Méx.';
+  return{estado:estado||'Sin estado',alcaldia:(p.city||'').trim()||estado||'Sin zona'};
+}
 function buildStops(cfg){
   const m=getMap();if(m.lat<0||m.lng<0)throw new Error('Selecciona las columnas de latitud y longitud.');
   const bad=[],parcels=[],outside=[],skipped=[],dups=[];const seen=new Set();
@@ -521,6 +542,7 @@ function buildStops(cfg){
     s.parcels.push(p);if(!s.dir&&p.dir)s.dir=p.dir;
   }
   for(const s of stops){
+    const z=zonaDe(s.parcels[0]);s.estado=z.estado;s.alcaldia=z.alcaldia;
     const explicit=s.parcels.map(p=>p.esp).filter(v=>isFinite(v)&&v>=0);
     const base=explicit.length?Math.max(...explicit):cfg.wait;
     s.svcMin=base+cfg.extra*(s.parcels.length-1);
@@ -612,6 +634,13 @@ function calibFactor(plan,ev,M,chicas){
   return raw>0?tt/raw:null;
 }
 
+/** 'CDMX · Cuauhtémoc, Benito Juárez' (las 2 alcaldías con más paradas). */
+function zonaRuta(out){
+  const c={},e={};out.forEach(o=>{e[o.st.estado]=(e[o.st.estado]||0)+1;c[o.st.alcaldia]=(c[o.st.alcaldia]||0)+1;});
+  const ests=Object.keys(e).sort((a,b)=>e[b]-e[a]),alc=Object.keys(c).sort((a,b)=>c[b]-c[a]);
+  return ests.join(' + ')+' · '+alc.slice(0,2).join(', ')+(alc.length>2?` +${alc.length-2}`:'');
+}
+
 // ===== Altitud (Open-Meteo, gratis) =====
 const ELEV={};
 async function elevaciones(pts){
@@ -650,7 +679,7 @@ function buildSchedule(plan,T0,svc,M,stops,cfg,Ts){
     });
     const end=new Date(t);
     const durMin=(end-cfg.start)/60000;
-    return{chica,total:used.length,stops:out,start:cfg.start,end,deadline:cfg.end,km,durMin,
+    return{chica,zona:zonaRuta(out),total:used.length,stops:out,start:cfg.start,end,deadline:cfg.end,km,durMin,
       latest:new Date(Math.max(cfg.start.getTime(),cfg.end.getTime()-durMin*60000)),
       parcels:out.reduce((a,s)=>a+s.st.parcels.length,0),slackMin:(cfg.end-end)/60000,geom,traffic:!!(plan.ev&&plan.ev[o.ri])};
   });
@@ -687,15 +716,19 @@ async function optimize(){
 
     // Motos chicas: paradas a las que solo puede ir una moto grande (cerro por altitud o solo por autopista)
     const restr=new Map();
-    if(cfg.small>0){
+    if(cfg.small>0&&cfg.smallZone==='cdmx')stops.forEach((s,i)=>{if(s.estado!=='CDMX')restr.set(i+1,s.estado==='Edo. Méx.'?'Edo. Méx.: solo moto grande':'sin estado conocido: solo moto grande');});
+    if(cfg.small>0&&cfg.altOn){
       setStatus('Revisando altitud de las paradas (motos chicas)…');
       try{const el=await elevaciones(pts);const base=el[0];
         if(base!=null)stops.forEach((s,i)=>{const e=el[i+1];if(e!=null&&e-base>cfg.altMax)restr.set(i+1,`cerro: ${Math.round(e-base)} m arriba de la base`);});}
       catch(e){warnings.push('No se pudo consultar la altitud de las paradas; las motos chicas no consideran cerros.');}
+    }
+    if(cfg.small>0&&cfg.motoOn){
       if(cfg.useTT){
         setStatus('Revisando qué paradas solo se alcanzan por autopista (TomTom)…');
-        try{const r=await api('alcanceMotoChica',{puntos:stops.map(s=>[s.lat,s.lng]),deposito:[cfg.depot.lat,cfg.depot.lng]});
-          r.puntos.forEach((x,i)=>{if(x&&!x.ok&&!restr.has(i+1))restr.set(i+1,x.motivo==='solo_por_autopista'?'solo se llega por autopista':`sin autopista tarda ${x.min_sin} min vs ${x.min_normal}`);});
+        const cand=stops.map((s,i)=>i).filter(i=>!restr.has(i+1));
+        try{const r=await api('alcanceMotoChica',{puntos:cand.map(i=>[stops[i].lat,stops[i].lng]),deposito:[cfg.depot.lat,cfg.depot.lng]});
+          r.puntos.forEach((x,k)=>{const i=cand[k];if(x&&!x.ok&&!restr.has(i+1))restr.set(i+1,x.motivo==='solo_por_autopista'?'solo se llega por autopista':`sin autopista tarda ${x.min_sin} min vs ${x.min_normal}`);});
           if(r.consultas)ttCallsPre+=r.consultas;}
         catch(e){warnings.push('No se pudo revisar autopistas con TomTom: '+e.message);}
       }else warnings.push('Sin key de TomTom no se pueden evitar autopistas ni carriles centrales: las motos chicas solo evitan cerros.');
@@ -704,16 +737,22 @@ async function optimize(){
     const scale=ff=>M.dur.map(row=>row.map(v=>v*ff));
     let T=scale(f);
     let fS=null;
-    const smallTs=()=>{if(!cfg.small)return null;const k=fS||f*(1+cfg.smallPen);return M.dur.map((row,i)=>row.map((v,j)=>(restr.has(i)||restr.has(j))&&i!==j?1e7:v*k));};
-    let Ts=smallTs();
+    // Zona de cada nodo para agrupar: cambiar de zona (sin contar la salida de la base) le cuesta grpPen al optimizador
+    const zkey=[''].concat(stops.map(s=>cfg.grp==='alcaldia'?norm(s.estado+'|'+s.alcaldia):cfg.grp==='estado'?s.estado:''));
+    const plan=Mx=>cfg.grp&&cfg.grpPen?Mx.map((row,i)=>row.map((v,j)=>i&&j&&i!==j&&zkey[i]!==zkey[j]&&v<1e6?v+cfg.grpPen:v)):Mx;
+    const smallReal=()=>{if(!cfg.small)return null;const k=fS||f*(1+cfg.smallPen);return M.dur.map(row=>row.map(v=>v*k));};
+    const smallTs=()=>{if(!cfg.small)return null;const R=smallReal();return R.map((row,i)=>row.map((v,j)=>(restr.has(i)||restr.has(j))&&i!==j?1e7:v));};
+    let Ts=smallReal();
     const smallAll=cfg.small>=cfg.K;
-    const opt=()=>cfg.small?{Ts,S:cfg.small}:null;
+    const opt=()=>cfg.small?{Ts:plan(smallTs()),S:cfg.small}:null;
+    const TP=()=>plan(T);
     const reachable=()=>{const a=[],u=[];for(let i=1;i<=n;i++)((T[0][i]+svc[i]>limit)||(smallAll&&restr.has(i))?u:a).push(i);return{a,u};};
+    if(smallAll&&restr.size)warnings.push(`Todas las motos son chicas: ${restr.size} parada(s) que necesitan moto grande quedaron sin ruta.`);
     let {a:active}=reachable();
     const K=Math.min(cfg.K,Math.max(1,active.length));
 
     setStatus(`Armando ${K} ruta(s)…`);setProg(0.45);
-    let planK=await solveAsync(T,svc,active,K,limit,cfg.ms,7,opt());
+    let planK=await solveAsync(TP(),svc,active,K,limit,cfg.ms,7,opt());
 
     if(ttOk){
       try{
@@ -722,13 +761,13 @@ async function optimize(){
           setStatus(`Midiendo tráfico real con TomTom (vuelta ${round+1})…`);
           planK.ev=await evalTomTom(planK,pts,cfg,p=>setProg(0.5+p*0.15));ttCalls+=planK.routes.filter(r=>r.length).length;
           fCal=calibFactor(planK,planK.ev,M,false);const fc=calibFactor(planK,planK.ev,M,true);if(fc)fS=fc*cfg.adj;
-          if(!fCal){Ts=smallTs();break;}
+          if(!fCal){Ts=smallReal();break;}
           const fNew=fCal*cfg.adj;const changed=Math.abs(fNew-f)/f>0.06;
-          f=fNew;T=scale(f);Ts=smallTs();
+          f=fNew;T=scale(f);Ts=smallReal();
           if(!changed||round>=2)break;
           ({a:active}=reachable());
           setStatus('Reoptimizando con el tráfico medido…');
-          planK=await solveAsync(T,svc,active,Math.min(K,Math.max(1,active.length)),limit,cfg.ms,11+round,opt());
+          planK=await solveAsync(TP(),svc,active,Math.min(K,Math.max(1,active.length)),limit,cfg.ms,11+round,opt());
         }
         if(fCal){const h=cfg.start.getHours();const cal=store.get('calib',{});cal[h]=cal[h]?cal[h]*0.5+fCal*0.5:fCal;store.set('calib',cal);
           trafficSrc=`TomTom (tráfico ${cfg.start.getTime()>Date.now()+60000?'previsto para la hora de salida':'en tiempo real'}) · factor medido ×${fCal.toFixed(2)}`;
@@ -748,7 +787,7 @@ async function optimize(){
       let k=Math.max(K+1,Math.ceil(sumK/limit));
       while(k<=active.length){
         setStatus(`No alcanza con ${K}. Probando con ${k} repartidores…`);setProg(0.7);
-        const p=await solveAsync(T,svc,active,k,limit,Math.max(1200,cfg.ms*0.6),100+k,opt());
+        const p=await solveAsync(TP(),svc,active,k,limit,Math.max(1200,cfg.ms*0.6),100+k,opt());
         let d=planDurs(p,T,svc,cfg,Ts);
         if(Math.max(...d)<=limit+1){
           if(ttOk){try{setStatus(`Validando ${k} rutas con TomTom…`);p.ev=await evalTomTom(p,pts,cfg,null);ttCalls+=k;d=planDurs(p,T,svc,cfg,Ts);}catch(err){ttOk=false;p.ev=null;warnings.push(err.message);}}
@@ -759,7 +798,7 @@ async function optimize(){
       if(planN&&N>K+1){
         for(let k2=N-1;k2>K;k2--){
           setStatus(`Verificando si bastan ${k2}…`);
-          const p=await solveAsync(T,svc,active,k2,limit,Math.max(1200,cfg.ms*0.6),300+k2,opt());
+          const p=await solveAsync(TP(),svc,active,k2,limit,Math.max(1200,cfg.ms*0.6),300+k2,opt());
           let d=planDurs(p,T,svc,cfg,Ts);if(Math.max(...d)>limit+1)break;
           if(ttOk){try{p.ev=await evalTomTom(p,pts,cfg,null);ttCalls+=k2;d=planDurs(p,T,svc,cfg,Ts);}catch(err){break;}}
           if(Math.max(...d)>limit+1)break;planN=p;N=k2;
@@ -799,7 +838,7 @@ function renderResult(){
   if(!R.feasibleK){
     const late=Math.round((R.maxK-R.limit)/60);
     if(R.planN){
-      h+=`<div class="alert bad"><span class="big">Faltan ${R.N-R.K} repartidor${R.N-R.K>1?'es':''}</span>Con ${R.K} no terminas antes de las ${hhmm(cfg.end)}: la mejor distribución acaba a las ${hhmm(new Date(cfg.start.getTime()+R.maxK*1000))} (${late} min tarde). Necesitas <b>${R.N} repartidores</b>; abajo están las ${R.N} rutas que sí terminan a tiempo.</div>`;
+      h+=`<div class="alert bad"><span class="big">Faltan ${R.N-R.K} repartidor${R.N-R.K>1?'es':''} con moto grande</span>Con ${R.K} no terminas antes de las ${hhmm(cfg.end)}: la mejor distribución acaba a las ${hhmm(new Date(cfg.start.getTime()+R.maxK*1000))} (${late} min tarde). Necesitas <b>${R.N} repartidores</b>; abajo están las ${R.N} rutas que sí terminan a tiempo.</div>`;
     }else{
       h+=`<div class="alert bad"><span class="big">No es posible terminar a tiempo</span>Ni con un repartidor por parada se termina antes de las ${hhmm(cfg.end)}. Amplía el horario o reduce la espera por parada.</div>`;
     }
@@ -811,7 +850,7 @@ function renderResult(){
   if(R.unreachStops.length)h+=`<div class="alert bad"><b>${R.unreachStops.length} parada(s) imposibles</b> en ese horario (solo el traslado desde Lassaga ya rebasa la hora límite): ${esc(R.unreachStops.map(s=>s.parcels.map(p=>p.id).join('/')).join(', '))}</div>`;
   R.warnings.forEach(w=>{h+=`<div class="alert warn">${esc(w)}</div>`;});
   if(R.cfg.small){const nCh=sched.filter(s=>s.chica).length;
-    h+=`<div class="alert info"><b>🛵 ${nCh} ruta(s) para moto chica</b> (sin autopistas, carriles centrales ni cerros). ${R.restrList.length?`${R.restrList.length} parada(s) quedaron solo para moto grande.`:'Ninguna parada requiere moto grande.'}`+
+    h+=`<div class="alert info"><b>🏍️ ${sched.length-nCh} moto(s) grande(s) · 🛵 ${nCh} chica(s)</b>${R.cfg.smallZone==='cdmx'?' — las chicas solo en CDMX':''}${R.cfg.altOn?', sin cerros':''}${R.cfg.motoOn?', sin autopistas ni carriles centrales':''}. ${R.restrList.length?`${R.restrList.length} parada(s) quedaron solo para moto grande.`:'Ninguna parada requiere moto grande.'}`+
       (R.restrList.length?`<details style="margin-top:6px"><summary>Ver paradas solo para moto grande</summary><ul style="margin:6px 0 0 18px">${R.restrList.map(x=>`<li>${esc(x.st.parcels.map(p=>p.id).join(', '))} · ${esc(x.st.dir||'')} — <i>${esc(x.motivo)}</i></li>`).join('')}</ul></details>`:'')+`</div>`;}
   const tp=sched.reduce((a,s)=>a+s.parcels,0),ts=sched.reduce((a,s)=>a+s.stops.length,0);
   h+=`<div class="chips">
@@ -823,12 +862,12 @@ function renderResult(){
   <div class="hint" style="margin-bottom:8px">Tiempos: ${esc(R.trafficSrc)}</div>
   <div class="btns" style="margin-bottom:10px"><button id="pubBtn" style="background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600">Publicar en la super app</button><button id="printAll">Imprimir tickets (todas)</button><button id="pdfAll">PDF 80 mm (todas)</button><button id="xlsOut">Excel de rutas</button></div>
   <div class="hint" style="margin-bottom:6px">Ordenadas por <b>prioridad de despacho</b>: la ruta 1 es la más larga y debe salir primero; la última es la más corta y puede salir al final. *Termina = saliendo a la hora de salida indicada.</div>
-  <div class="tblwrap"><table class="tbl"><thead><tr><th>Prioridad</th><th>Paradas</th><th>Envíos</th><th>Km</th><th>Duración</th><th>Salir a más tardar</th><th>Termina*</th><th>Holgura</th><th>Estado</th><th>Repartidor</th><th></th></tr></thead><tbody>`;
+  <div class="tblwrap"><table class="tbl"><thead><tr><th>Prioridad</th><th>Moto · zona</th><th>Paradas</th><th>Envíos</th><th>Km</th><th>Duración</th><th>Salir a más tardar</th><th>Termina*</th><th>Holgura</th><th>Estado</th><th>Repartidor</th><th></th></tr></thead><tbody>`;
   sched.forEach((s,i)=>{const ok=s.slackMin>=-0.5;
-    h+=`<tr data-i="${i}"><td><span class="dot" style="background:${s.color}"></span>Ruta ${s.num}${s.chica?' <span title="Moto chica: sin autopistas ni cerros" style="font-size:11px;background:var(--info-bg);color:var(--info);padding:1px 5px;border-radius:6px">🛵 chica</span>':''}</td><td>${s.stops.length}</td><td>${s.parcels}</td><td>${s.km.toFixed(1)}</td><td>${durTxt(s.durMin)}</td><td><b>${hhmm(s.latest)}</b></td><td>${hhmm(s.end)}</td><td>${Math.round(s.slackMin)} min</td><td class="${ok?'st-ok':'st-bad'}">${ok?'A tiempo':'Tarde'}</td><td><select class="emp" data-emp="${i}" style="min-width:170px;padding:5px">${empOptions()}</select></td><td style="display:flex;gap:4px"><button data-print="${i}">Imprimir</button><button data-pdf="${i}">PDF</button><button data-wa="${i}" style="background:#25D366;border-color:#25D366;color:#fff">WhatsApp</button><button data-copy="${i}">Copiar</button></td></tr>`;});
+    h+=`<tr data-i="${i}"><td><span class="dot" style="background:${s.color}"></span>Ruta ${s.num}</td><td style="white-space:normal;min-width:170px"><span style="font-size:11px;padding:1px 6px;border-radius:6px;background:${s.chica?'var(--info-bg)':'var(--chip)'};color:${s.chica?'var(--info)':'var(--fg)'};font-weight:600">${s.chica?'🛵 Chica':'🏍️ Grande'}</span> <span class="muted" style="font-size:12px">${esc(s.zona)}</span></td><td>${s.stops.length}</td><td>${s.parcels}</td><td>${s.km.toFixed(1)}</td><td>${durTxt(s.durMin)}</td><td><b>${hhmm(s.latest)}</b></td><td>${hhmm(s.end)}</td><td>${Math.round(s.slackMin)} min</td><td class="${ok?'st-ok':'st-bad'}">${ok?'A tiempo':'Tarde'}</td><td><select class="emp" data-emp="${i}" style="min-width:170px;padding:5px">${empOptions()}</select></td><td style="display:flex;gap:4px"><button data-print="${i}">Imprimir</button><button data-pdf="${i}">PDF</button><button data-wa="${i}" style="background:#25D366;border-color:#25D366;color:#fff">WhatsApp</button><button data-copy="${i}">Copiar</button></td></tr>`;});
   h+=`</tbody></table></div>`;
   sched.forEach((s,i)=>{
-    h+=`<details class="route" id="det${i}"><summary><span class="dot" style="background:${s.color}"></span>Ruta ${s.num}${s.chica?' · 🛵 moto chica':''} · ${s.stops.length} paradas · ${durTxt(s.durMin)} · salir a más tardar ${hhmm(s.latest)}</summary><ol>`;
+    h+=`<details class="route" id="det${i}"><summary><span class="dot" style="background:${s.color}"></span>Ruta ${s.num} · ${s.chica?'🛵 moto chica':'🏍️ moto grande'} · ${esc(s.zona)} · ${s.stops.length} paradas · ${durTxt(s.durMin)} · salir a más tardar ${hhmm(s.latest)}</summary><ol>`;
     s.stops.forEach(o=>{h+=`<li><b>${hhmm(o.eta)}</b> · ${esc(o.st.parcels.map(p=>p.id).join(', '))}<br><span>${esc(o.st.dir||(o.st.lat.toFixed(5)+', '+o.st.lng.toFixed(5)))} · espera ${Math.round(o.svcMin)} min</span></li>`;});
     h+=`</ol></details>`;
   });
@@ -896,7 +935,7 @@ function drawTicket(doc,R,cfg,draw){
   const d=cfg.start.toLocaleDateString('es-MX',{weekday:'short',day:'2-digit',month:'short',year:'numeric'});
   P(`Repartidor: ${R.repartidor||'____________________'}`,'bold',10.5,0.5);
   P(`Prioridad de despacho: ${R.num} de ${R.total}`,'bold',10);
-  if(R.chica)P('MOTO CHICA: sin autopistas ni carriles centrales','bold',9.5);
+  P((R.chica?'MOTO CHICA (sin autopistas ni carriles centrales)':'MOTO GRANDE')+' · '+R.zona,'bold',9.5);
   P(`Fecha: ${d}`,'bold',9);P(`Salida: ${hhmm(R.start)} de Lassaga 54 · salir a más tardar ${hhmm(R.latest)}`,'bold',9);
   P(`Paradas: ${R.stops.length}  Envíos: ${R.parcels}  ${R.km.toFixed(1)} km`,'bold',9);
   const same=R.stops.filter(o=>o.st.parcels.some(p=>p.tipo==='same_day')).length;if(same)P(`Mismo día: ${same} parada(s)`,'bold',9);
@@ -933,7 +972,7 @@ function ticketHTML(R,cfg){
   const k=cfg.fs,px=v=>(v*k).toFixed(1)+'pt';
   const d=cfg.start.toLocaleDateString('es-MX',{weekday:'short',day:'2-digit',month:'short',year:'numeric'});
   const same=R.stops.filter(o=>o.st.parcels.some(p=>p.tipo==='same_day')).length;
-  let h=`<section class="t"><div class="c b" style="font-size:${px(16)}">PACKATELAS</div><div class="c b" style="font-size:${px(14)}">RUTA ${R.num} de ${R.total}</div><div class="c b" style="font-size:${px(9)}">PRIORIDAD DE DESPACHO ${R.num}</div>${R.chica?`<div class="c b" style="font-size:${px(9)};border:1.5px solid #000;margin-top:2px">MOTO CHICA · SIN AUTOPISTAS NI CARRILES CENTRALES</div>`:''}
+  let h=`<section class="t"><div class="c b" style="font-size:${px(16)}">PACKATELAS</div><div class="c b" style="font-size:${px(14)}">RUTA ${R.num} de ${R.total}</div><div class="c b" style="font-size:${px(9)}">PRIORIDAD DE DESPACHO ${R.num}</div><div class="c b" style="font-size:${px(9)};border:1.5px solid #000;margin-top:2px">${R.chica?'MOTO CHICA · SIN AUTOPISTAS NI CARRILES CENTRALES':'MOTO GRANDE'}<br>${esc(R.zona||'')}</div>
   <div class="b" style="font-size:${px(11)};margin-top:4px">Repartidor: ${esc(R.repartidor||'____________________')}</div>
   <div class="b">Fecha: ${esc(d)}<br>Salida: ${hhmm(R.start)} de Lassaga 54<br>Salir a más tardar: ${hhmm(R.latest)} · duración ${durTxt(R.durMin)}<br>Paradas: ${R.stops.length} · Envíos: ${R.parcels} · ${R.km.toFixed(1)} km${same?`<br>Mismo día: ${same} parada(s)`:''}</div>
   <div class="b" style="font-size:${px(12)};margin-top:3px">Termina aprox: ${hhmm(R.end)} <span style="font-size:${px(9)}">(límite ${hhmm(R.deadline)})</span></div><hr class="thick">`;
@@ -968,7 +1007,7 @@ function printTickets(idxs){
 }
 function routeText(R){
   const e=empleadoDe(R.num);
-  let t=`*PACKATELAS · Ruta ${R.num} de ${R.total}*${e?' · '+e.nombre:''}\n${R.start.toLocaleDateString('es-MX',{weekday:'long',day:'2-digit',month:'short'})}\nPrioridad de despacho ${R.num} de ${R.total} · salir a más tardar ${hhmm(R.latest)}${R.chica?'\n🛵 Moto chica: sin autopistas ni carriles centrales':''}\nSalida ${hhmm(R.start)} desde Lassaga 54 · termina aprox ${hhmm(R.end)}\n${R.stops.length} paradas · ${R.parcels} envíos · ${R.km.toFixed(1)} km\n`;
+  let t=`*PACKATELAS · Ruta ${R.num} de ${R.total}*${e?' · '+e.nombre:''}\n${R.start.toLocaleDateString('es-MX',{weekday:'long',day:'2-digit',month:'short'})}\nPrioridad de despacho ${R.num} de ${R.total} · salir a más tardar ${hhmm(R.latest)}${R.chica?'\n🛵 Moto chica: sin autopistas ni carriles centrales':'\n🏍️ Moto grande'} · ${R.zona||''}\nSalida ${hhmm(R.start)} desde Lassaga 54 · termina aprox ${hhmm(R.end)}\n${R.stops.length} paradas · ${R.parcels} envíos · ${R.km.toFixed(1)} km\n`;
   R.stops.forEach((o,i)=>{
     const s=stopInfo(o,i,R);
     t+=`\n*${s.n}. ~${s.eta}*${s.same?' · MISMO DÍA':''} · ${s.ids.join(', ')}\n${s.nombres?s.nombres+'\n':''}${s.calle}\n${s.zona?s.zona+'\n':''}${s.comp?'Compromiso: '+s.comp+'\n':''}${mapsURL(o.st)}\n`;
@@ -1007,7 +1046,7 @@ async function publicar(){
 function exportXLSX(){
   const R=S.result;const sched=currentSched();const rows=[];
   sched.forEach(s=>s.stops.forEach((o,k)=>o.st.parcels.forEach(p=>rows.push({Ruta:s.num,Repartidor:empleadoDe(s.num)?.nombre||'',Orden:k+1,Envio:p.id,Direccion:p.dir,Referencia:p.ref,Latitud:p.lat,Longitud:p.lng,Llegada:hhmm(o.eta),Sale:hhmm(o.leave),Espera_min:Math.round(o.svcMin)}))));
-  const res=sched.map(s=>({Prioridad:s.num,Duracion_min:Math.round(s.durMin),Salir_a_mas_tardar:hhmm(s.latest),Ruta:s.num,Paradas:s.stops.length,Envios:s.parcels,Km:+s.km.toFixed(1),Salida:hhmm(s.start),Termina:hhmm(s.end),Holgura_min:Math.round(s.slackMin)}));
+  const res=sched.map(s=>({Prioridad:s.num,Moto:s.chica?'Chica':'Grande',Zona:s.zona,Duracion_min:Math.round(s.durMin),Salir_a_mas_tardar:hhmm(s.latest),Ruta:s.num,Paradas:s.stops.length,Envios:s.parcels,Km:+s.km.toFixed(1),Salida:hhmm(s.start),Termina:hhmm(s.end),Holgura_min:Math.round(s.slackMin)}));
   const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'Paradas');XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(res),'Resumen');
   XLSX.writeFile(wb,`rutas_${R.cfg.date}.xlsx`);
 }
