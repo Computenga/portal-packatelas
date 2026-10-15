@@ -26,6 +26,9 @@ const hav = (a, b) => { const R = 6371000, t = Math.PI / 180; const x = Math.sin
     const dist = src.map(i => dst.map(j => hav(coords[i], coords[j]) * 1.4));
     route.fulfill({ contentType: 'application/json', body: JSON.stringify({ code: 'Ok', distances: dist, durations: dist.map(r => r.map(d => d / (25 / 3.6))) }) });
   });
+  // altitud simulada: al norte (lat > 19.55) son cerros
+  await p.route('**/api.open-meteo.com/**', route => { const u = new URL(route.request().url()); const la = u.searchParams.get('latitude').split(',').map(Number);
+    route.fulfill({ contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ elevation: la.map(x => x > 19.55 ? 2450 : 2240) }) }); });
   // API del portal simulada
   await p.route('**/script.google.com/**', async route => {
     const req = JSON.parse(route.request().postData());
@@ -37,6 +40,7 @@ const hav = (a, b) => { const R = 6371000, t = Math.PI / 180; const x = Math.sin
       { no_empleado: '75', nombre: 'Michell Saucedo', telefono: '', repartidor: true },
       { no_empleado: '5', nombre: 'Casandra Ruiz', telefono: '', repartidor: false }] };
     else if (req.action === 'tomtomRutas') data = { rutas: req.rutas.map(r => ({ legs: r.locs.slice(1).map((pt, i) => { const d = hav([r.locs[i][1], r.locs[i][0]], [pt[1], pt[0]]) * 1.35; return { sec: d / (22 / 3.6), m: d, pts: [r.locs[i], pt] }; }) })) };
+    else if (req.action === 'alcanceMotoChica') data = { consultas: req.puntos.length * 2, puntos: req.puntos.map(pt => pt[1] < -99.22 ? { ok: false, motivo: 'solo_por_autopista', min_normal: 30, min_sin: 60 } : { ok: true }) };
     else if (req.action === 'publicarRutas') { fs.writeFileSync(OUT + '/publicar.json', JSON.stringify(req, null, 1)); data = { publicadas: req.rutas.length, con_push: req.rutas.length }; }
     else return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'acción no simulada ' + req.action }) });
     route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, data }) });
@@ -48,6 +52,7 @@ const hav = (a, b) => { const R = 6371000, t = Math.PI / 180; const x = Math.sin
   await p.setInputFiles('#file', XLSX_FILE);
   await p.waitForTimeout(800);
   await p.fill('#drivers', '4'); await p.dispatchEvent('#drivers', 'change');
+  await p.fill('#small', '2'); await p.dispatchEvent('#small', 'change');
   await p.fill('#tStart', '15:00'); await p.fill('#tEnd', '21:00');
   await p.click('#run');
   await p.waitForSelector('select[data-emp]', { timeout: 120000 });
@@ -56,6 +61,9 @@ const hav = (a, b) => { const R = 6371000, t = Math.PI / 180; const x = Math.sin
   for (let i = 0; i < sels; i++) await p.locator('select[data-emp]').nth(i).selectOption(emps[i % emps.length]);
   await p.waitForTimeout(500);
   await p.screenshot({ path: OUT + '/t01-ruteador.png', fullPage: false });
+  const info = await p.evaluate(() => { const R = window.__ruteador; const sc = R.currentSched(); const bad = new Set(R.S.result.restrList.map(x => x.st));
+    return { chicas: sc.filter(r => r.chica).length, restr: bad.size, viol: sc.filter(r => r.chica).reduce((a, r) => a + r.stops.filter(o => bad.has(o.st)).length, 0), rutas: sc.length }; });
+  console.log('motos chicas:', JSON.stringify(info));
   await p.click('#pubBtn');
   await p.waitForTimeout(1500);
   // ticket impreso (80 mm ≈ 302 px)

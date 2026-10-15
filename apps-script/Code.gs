@@ -51,6 +51,11 @@ const SCHEMA = {
     'estado_tiempo', 'retraso_min'],
   ReporteRutas: ['fecha', 'ruta_id', 'no_empleado', 'nombre', 'envios', 'entregados', 'no_entregados', 'en_orden', 'fuera_orden',
     'pct_orden', 'tarde', 'retraso_prom', 'fin_plan', 'fin_real', 'otros_repartidores', 'calificacion', 'detalle_json', 'generado'],
+  GpsLog: ['fecha', 'carrier_id', 'no_empleado', 'nombre', 'lat', 'lng', 'en_turno'],
+  Recolecciones: ['rec_id', 'fecha', 'order_id', 'order_number', 'cliente', 'direccion', 'lat', 'lng', 'volumen', 'puntos', 'no_empleado',
+    'nombre', 'carrier_id', 'estado', 'creada', 'resuelta', 'resuelta_por', 'nota'],
+  ClientesRecoleccion: ['cliente', 'volumen', 'direccion', 'lat', 'lng', 'notas', 'alta'],
+  AlcanceMoto: ['clave', 'lat', 'lng', 'chica_ok', 'motivo', 'min_normal', 'min_sin_autopista', 'fecha'],
   Apps: ['app_id', 'nombre', 'descripcion', 'icono', 'color', 'tipo', 'url_instalar', 'android_package', 'url_abrir',
     'puestos', 'requerida', 'acceso_directo', 'orden', 'activo'],
 };
@@ -99,6 +104,12 @@ const CONFIG_DEFAULTS = [
   ['RUTA_TOLERANCIA_MIN', '20', 'Minutos de tolerancia contra la hora estimada antes de contar una entrega como tarde'],
   ['RUTA_REPORTE_HORA', '23', 'Hora (0-23) del reporte diario de rutas contra Shipday (después del límite de entrega de las 23:00)'],
   ['SHIPDAY_PREFIJO', 'ML-', 'Prefijo de los números de orden en Shipday (antes del número de shipment)'],
+  ['GPS_PRUEBA', 'SI', 'SI = cada 5 min se guarda la ubicación de los repartidores de Shipday (prueba, sin alertas)'],
+  ['RECOLECCION_MODO', 'aprobacion', 'aprobacion = propone y un admin aprueba · automatico = asigna directo en Shipday · apagado'],
+  ['RECOLECCION_HASTA', '12:00', 'Hora límite para asignar recolecciones en automático'],
+  ['RECOLECCION_DESDE', '08:00', 'Hora desde la que se buscan recolecciones'],
+  ['RECOLECCION_CAPACIDAD', '6', 'Puntos de volumen que puede recolectar un repartidor (bajo=1, medio=2, alto=3)'],
+  ['RECOLECCION_TEXTO', 'recoleccion', 'Texto que identifica una recolección en el número de envío o el nombre de origen'],
   ['SEGUIMIENTO_MIN', '10', 'Cada cuántos minutos se revisa en Shipday el estado de las rutas del día (mínimo 10)'],
   ['SEGUIMIENTO_DESDE', '8', 'Hora (0-23) desde la que se revisa Shipday'],
   ['SEGUIMIENTO_HASTA', '23', 'Hora (0-23) hasta la que se revisa Shipday'],
@@ -210,6 +221,15 @@ const ACTIONS = {
   reporteRutas:     { ops: true, fn: (req) => reporteRutas_(req.fecha || hoy_(), false) },
   shipdayRepartidores: { admin: true, fn: shipdayRepartidores_ },
   vincularShipday:  { admin: true, fn: vincularShipday_ },
+  gpsPrueba:        { admin: true, fn: (req) => gpsPrueba_(req.fecha || hoy_()) },
+  gpsAhora:         { admin: true, fn: () => { asegurarTriggerReporte_(); return gpsMuestrear_(); } },
+  recolecciones:    { ops: true, fn: (req) => recoleccionesVista_(req.fecha || hoy_()) },
+  recoleccionesBuscar: { ops: true, fn: () => recoleccionesBuscar_(true) },
+  recoleccionAprobar:  { ops: true, fn: recoleccionAprobar_ },
+  recoleccionCambiar:  { ops: true, fn: recoleccionCambiar_ },
+  recoleccionRechazar: { ops: true, fn: recoleccionRechazar_ },
+  clienteVolumen:   { ops: true, fn: clienteVolumen_ },
+  alcanceMotoChica: { ops: true, fn: alcanceMotoChica_ },
   seguimientoAhora: { ops: true, fn: () => seguimientoRutas_(true) },
   seguimientoRuta:  { ops: true, fn: (req) => seguimientoDetalle_(req.ruta_id) },
   shipdayMuestra:   { ops: true, fn: shipdayMuestra_ },
@@ -240,6 +260,7 @@ function instalarTriggers() {
   ScriptApp.newTrigger('sincronizarPersonal').timeBased().everyMinutes(15).create();
   ScriptApp.newTrigger('tareaReporteRutas').timeBased().everyHours(1).create();
   ScriptApp.newTrigger('tareaSeguimientoRutas').timeBased().everyMinutes(10).create();
+  ScriptApp.newTrigger('tareaOperacion5').timeBased().everyMinutes(5).create();
 }
 
 function ensureTab_(name, headers) {
@@ -1869,6 +1890,7 @@ function asegurarTriggerReporte_() {
     const h = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction && t.getHandlerFunction());
     if (h.indexOf('tareaReporteRutas') < 0) ScriptApp.newTrigger('tareaReporteRutas').timeBased().everyHours(1).create();
     if (h.indexOf('tareaSeguimientoRutas') < 0) ScriptApp.newTrigger('tareaSeguimientoRutas').timeBased().everyMinutes(10).create();
+    if (h.indexOf('tareaOperacion5') < 0) ScriptApp.newTrigger('tareaOperacion5').timeBased().everyMinutes(5).create();
   } catch (e) { console.warn('trigger rutas', e); }
 }
 function rutasTabs_() {
@@ -1926,7 +1948,8 @@ function tomtomRutas_(req) {
     for (let s = 0; s < locs.length - 1; s += MAXP - 1) {
       const seg = locs.slice(s, Math.min(locs.length, s + MAXP));
       const url = 'https://api.tomtom.com/routing/1/calculateRoute/' + seg.map(p => Number(p[0]).toFixed(6) + ',' + Number(p[1]).toFixed(6)).join(':') +
-        '/json?key=' + encodeURIComponent(key) + '&traffic=true&routeType=fastest&travelMode=' + mode + '&departAt=' + encodeURIComponent(dep) + '&routeRepresentation=polyline';
+        '/json?key=' + encodeURIComponent(key) + '&traffic=true&routeType=fastest&travelMode=' + mode + '&departAt=' + encodeURIComponent(dep) + '&routeRepresentation=polyline' +
+        (r.chica ? '&avoid=motorways&avoid=tollRoads' : '');
       jobs.push({ ri: ri, url: url });
     }
   });
@@ -2262,6 +2285,326 @@ function vincularShipday_(req, u) {
     bitacora_(u.no_empleado, 'vincular_shipday', 'Personal', req.no_empleado || '', id);
     return true;
   });
+}
+
+
+// ───────────────────────── Operación: GPS de Shipday (prueba) y recolecciones ─────────────────────────
+
+function tabsOperacion_() { ['GpsLog', 'Recolecciones', 'ClientesRecoleccion', 'AlcanceMoto'].forEach(n => { if (!ss_().getSheetByName(n) || SCHEMA[n].some(c => headers_(n).indexOf(c) < 0)) ensureTab_(n, SCHEMA[n]); }); }
+
+/** Trigger cada 5 min: muestra de GPS (si está en prueba) y búsqueda de recolecciones (hasta la hora límite). */
+function tareaOperacion5() {
+  const hm = fmt_(new Date(), 'HH:mm');
+  if (hm < '07:00' || hm > '23:30') return;
+  if (prop_('SHIPDAY_KEY') && String(config_('GPS_PRUEBA', 'SI')).toUpperCase() === 'SI') { try { gpsMuestrear_(); } catch (e) { console.warn('gps', e); } }
+  const modo = String(config_('RECOLECCION_MODO', 'aprobacion'));
+  if (prop_('SHIPDAY_KEY') && modo !== 'apagado' && hm >= String(config_('RECOLECCION_DESDE', '08:00')) && hm <= String(config_('RECOLECCION_HASTA', '12:00'))) {
+    try { recoleccionesBuscar_(false); } catch (e) { console.warn('recolecciones', e); }
+  }
+}
+
+function shipdayCarriers_() {
+  const key = prop_('SHIPDAY_KEY');
+  if (!key) throw new Error('Falta la key de Shipday. Guárdala en el ruteador → Claves del servidor.');
+  const r = UrlFetchApp.fetch('https://api.shipday.com/carriers', { muteHttpExceptions: true, headers: { Authorization: 'Basic ' + key, Accept: 'application/json' } });
+  if (r.getResponseCode() !== 200) throw new Error('Shipday respondió ' + r.getResponseCode());
+  let l = []; try { l = JSON.parse(r.getContentText()); } catch (e) {}
+  return Array.isArray(l) ? l : [];
+}
+function empleadoDeCarrier_(id, per) { return (per || rows_('Personal')).find(p => idsShipday_(p).indexOf(String(id)) >= 0) || null; }
+
+function gpsMuestrear_() {
+  tabsOperacion_();
+  const per = rows_('Personal'), ahora = new Date();
+  let n = 0;
+  const filas = [];
+  shipdayCarriers_().forEach(c => {
+    const lat = c.carrrierLocationLat != null ? c.carrrierLocationLat : c.carrierLocationLat, lng = c.carrrierLocationLng != null ? c.carrrierLocationLng : c.carrierLocationLng;
+    if (c.isActive === false || (!c.isOnShift && lat == null)) return;
+    const e = empleadoDeCarrier_(c.id, per);
+    filas.push([ahora, String(c.id), e ? String(e.no_empleado) : '', c.name || '', lat == null ? '' : Number(lat), lng == null ? '' : Number(lng), c.isOnShift ? 'SI' : 'NO']);
+    n++;
+  });
+  if (filas.length) { const sh = sheet_('GpsLog'); sh.getRange(sh.getLastRow() + 1, 1, filas.length, filas[0].length).setValues(filas); delete _cache['r:GpsLog']; }
+  // conservar solo 10 días
+  const sh = sheet_('GpsLog');
+  if (sh.getLastRow() > 30000) sh.deleteRows(2, sh.getLastRow() - 25000);
+  return { muestras: n };
+}
+
+/** Análisis de un día de prueba: cada cuánto cambia la ubicación y qué paradas de 15+ min se habrían detectado. */
+function gpsPrueba_(fecha) {
+  tabsOperacion_();
+  asegurarTriggerReporte_();
+  const filas = rows_('GpsLog').filter(r => fmt_(r.fecha, 'yyyy-MM-dd') === fecha);
+  const por = {};
+  filas.forEach(r => { (por[r.carrier_id] = por[r.carrier_id] || { carrier_id: String(r.carrier_id), nombre: r.nombre, no_empleado: String(r.no_empleado || ''), m: [] }).m.push(r); });
+  const per = rows_('Personal');
+  return { fecha: fecha, activo: String(config_('GPS_PRUEBA', 'SI')).toUpperCase() === 'SI', repartidores: Object.keys(por).map(k => {
+    const x = por[k];
+    const m = x.m.map(r => ({ t: new Date(r.fecha).getTime(), lat: r.lat === '' ? null : Number(r.lat), lng: r.lng === '' ? null : Number(r.lng), turno: r.en_turno === 'SI' })).sort((a, b) => a.t - b.t);
+    const conGps = m.filter(p => p.lat != null);
+    let cambios = 0, congelado = 0, maxCong = 0, ini = null;
+    for (let i = 1; i < conGps.length; i++) {
+      const igual = conGps[i].lat === conGps[i - 1].lat && conGps[i].lng === conGps[i - 1].lng;
+      if (!igual) { cambios++; congelado = 0; } else { congelado += (conGps[i].t - conGps[i - 1].t) / 60000; maxCong = Math.max(maxCong, congelado); }
+    }
+    // paradas: ventana de puntos a menos de 100 m del primero durante 15+ min (con movimiento real de GPS)
+    const paradas = [];
+    let i = 0;
+    while (i < conGps.length) {
+      let j = i;
+      while (j + 1 < conGps.length && havM_([conGps[i].lat, conGps[i].lng], [conGps[j + 1].lat, conGps[j + 1].lng]) <= 100) j++;
+      const dur = (conGps[j].t - conGps[i].t) / 60000;
+      if (dur >= 15) {
+        const seg = conGps.slice(i, j + 1);
+        const exactos = seg.every(p => p.lat === seg[0].lat && p.lng === seg[0].lng);
+        const enBase = havM_([conGps[i].lat, conGps[i].lng], [19.4182, -99.1369]) <= 150;
+        paradas.push({ desde: fmt_(new Date(conGps[i].t), 'HH:mm'), hasta: fmt_(new Date(conGps[j].t), 'HH:mm'), min: Math.round(dur),
+          lat: round_(conGps[i].lat, 5), lng: round_(conGps[i].lng, 5), tipo: enBase ? 'base' : exactos ? 'sin_senal' : 'detenido' });
+        i = j + 1;
+      } else i++;
+    }
+    const e = x.no_empleado ? per.find(p => String(p.no_empleado) === x.no_empleado) : null;
+    return { carrier_id: x.carrier_id, nombre: x.nombre, empleado: e ? e.nombre : '', muestras: m.length, con_gps: conGps.length,
+      en_turno: m.filter(p => p.turno).length, cambios: cambios, pct_cambio: conGps.length > 1 ? Math.round(cambios / (conGps.length - 1) * 100) : 0,
+      max_congelado_min: Math.round(maxCong), primera: m.length ? fmt_(new Date(m[0].t), 'HH:mm') : '', ultima: m.length ? fmt_(new Date(m[m.length - 1].t), 'HH:mm') : '',
+      ultima_pos: conGps.length ? [round_(conGps[conGps.length - 1].lat, 5), round_(conGps[conGps.length - 1].lng, 5)] : null, paradas: paradas };
+  }).sort((a, b) => String(a.nombre).localeCompare(String(b.nombre))) };
+}
+
+// ── Recolecciones ──
+
+const PUNTOS_VOLUMEN = { bajo: 1, medio: 2, alto: 3 };
+function normTxt_(s) { return quitarAcentos_(String(s || '')).toLowerCase(); }
+const BASE_ = [19.4182, -99.1369];
+
+function shipdayActivas_() {
+  const key = prop_('SHIPDAY_KEY');
+  const r = UrlFetchApp.fetch('https://api.shipday.com/orders', { muteHttpExceptions: true, headers: { Authorization: 'Basic ' + key, Accept: 'application/json' } });
+  if (r.getResponseCode() !== 200) throw new Error('Shipday respondió ' + r.getResponseCode() + ' al leer órdenes activas');
+  let l = []; try { l = JSON.parse(r.getContentText()); } catch (e) {}
+  return Array.isArray(l) ? l : [];
+}
+
+/** Repartidores disponibles hoy: checaron entrada, no han checado salida, son repartidores y tienen cuenta de Shipday vinculada. */
+function repartidoresDisponibles_() {
+  const hoy = hoy_();
+  const chk = checadasPorDia_(hoy, hoy);
+  return rows_('Personal').filter(p => p.estatus !== 'baja' && idsShipday_(p).length && rolBienvenida_(p) === 'repartidor').map(p => {
+    const marcas = (chk[String(p.no_empleado)] || {})[hoy] || [];
+    const ent = marcas.find(m => m.tipo === 'ENTRADA');
+    const sal = marcas.filter(m => m.tipo === 'SALIDA').pop();
+    return { no_empleado: String(p.no_empleado), nombre: p.nombre, carrier_id: idsShipday_(p)[0], entrada: ent ? ent.hora : '', salio: !!sal };
+  }).filter(d => d.entrada && !d.salio);
+}
+
+function clienteRec_(nombre, direccion) {
+  const l = rows_('ClientesRecoleccion');
+  let c = l.find(x => normTxt_(x.cliente) === normTxt_(nombre));
+  if (!c) {
+    append_('ClientesRecoleccion', { cliente: nombre, volumen: '', direccion: direccion || '', alta: new Date() });
+    c = rows_('ClientesRecoleccion').find(x => normTxt_(x.cliente) === normTxt_(nombre));
+  }
+  return c;
+}
+
+function geocodificar_(direccion) {
+  if (!direccion) return null;
+  try {
+    const g = Maps.newGeocoder().setRegion('mx').setLanguage('es').geocode(direccion + ', México');
+    const r = g && g.results && g.results[0];
+    return r ? [r.geometry.location.lat, r.geometry.location.lng] : null;
+  } catch (e) { console.warn('geocode', e); return null; }
+}
+
+/** De una orden de Shipday saca cliente, dirección y coordenadas del lugar donde hay que recolectar. */
+function puntoRecoleccion_(o) {
+  const rest = o.restaurant || o.pickup || {}, cust = o.customer || o.delivery || {};
+  const nombre = rest.name || o.restaurantName || cust.name || '';
+  const dir = rest.address || o.restaurantAddress || cust.address || '';
+  let lat = rest.latitude != null ? rest.latitude : rest.lat, lng = rest.longitude != null ? rest.longitude : rest.lng;
+  return { cliente: String(nombre).trim(), direccion: String(dir).trim(), lat: lat != null ? Number(lat) : null, lng: lng != null ? Number(lng) : null };
+}
+
+function esRecoleccion_(o) {
+  const t = normTxt_(config_('RECOLECCION_TEXTO', 'recoleccion'));
+  const rest = o.restaurant || {};
+  return normTxt_(o.orderNumber).indexOf(t) >= 0 || normTxt_(rest.name).indexOf(t) >= 0 || normTxt_(o.restaurantName).indexOf(t) >= 0;
+}
+function creadaHoy_(o) {
+  const al = o.activityLog || {};
+  const t = shipdayFecha_(al.placementTime || o.placementTime || al.createdAt || o.createdAt);
+  return !t || fmt_(t, 'yyyy-MM-dd') === hoy_();
+}
+function sinAsignar_(o) { const id = o.assignedCarrierId != null ? o.assignedCarrierId : (o.assignedCarrier || o.carrier || {}).id; return id == null || id === '' || Number(id) <= 0; }
+
+/** Busca recolecciones nuevas y las reparte entre los disponibles (propuesta o directo según RECOLECCION_MODO). */
+function recoleccionesBuscar_(manual) {
+  tabsOperacion_();
+  const fecha = hoy_();
+  const modo = String(config_('RECOLECCION_MODO', 'aprobacion'));
+  const cap = Number(config_('RECOLECCION_CAPACIDAD', 6));
+  const ya = rows_('Recolecciones').filter(r => fmt_(r.fecha, 'yyyy-MM-dd') === fecha);
+  const vistos = {}; ya.forEach(r => vistos[String(r.order_id)] = 1);
+  const nuevas = shipdayActivas_().filter(o => esRecoleccion_(o) && creadaHoy_(o) && sinAsignar_(o) && !vistos[String(o.orderId)]);
+  const disp = repartidoresDisponibles_();
+  if (!nuevas.length) return { nuevas: 0, disponibles: disp.length };
+  // carga actual de cada repartidor (lo propuesto o asignado hoy)
+  const carga = {};
+  disp.forEach(d => carga[d.no_empleado] = { d: d, puntos: 0, pts: [] });
+  ya.filter(r => ['propuesta', 'aprobada', 'asignada'].indexOf(r.estado) >= 0 && carga[String(r.no_empleado)])
+    .forEach(r => { const c = carga[String(r.no_empleado)]; c.puntos += Number(r.puntos || 0); if (r.lat !== '') c.pts.push([Number(r.lat), Number(r.lng)]); });
+  const items = nuevas.map(o => {
+    const p = puntoRecoleccion_(o);
+    const cli = clienteRec_(p.cliente || 'Sin nombre', p.direccion);
+    if (p.lat == null && cli && cli.lat !== '' && cli.lat != null && normTxt_(cli.direccion) === normTxt_(p.direccion)) { p.lat = Number(cli.lat); p.lng = Number(cli.lng); }
+    if (p.lat == null) { const g = geocodificar_(p.direccion); if (g) { p.lat = g[0]; p.lng = g[1]; if (cli) update_('ClientesRecoleccion', cli._row, { lat: g[0], lng: g[1], direccion: p.direccion }); } }
+    const vol = String((cli && cli.volumen) || '').toLowerCase();
+    return { o: o, p: p, volumen: vol, puntos: PUNTOS_VOLUMEN[vol] || PUNTOS_VOLUMEN.medio };
+  });
+  // costo de agregar el punto a un recorrido abierto que sale de la base (inserción más barata, distancia en línea recta)
+  const costo = (pts, x) => {
+    if (!x) return 0;
+    const ruta = [BASE_].concat(pts);
+    let best = havM_(ruta[ruta.length - 1], x);
+    for (let k = 0; k < ruta.length - 1; k++) best = Math.min(best, havM_(ruta[k], x) + havM_(x, ruta[k + 1]) - havM_(ruta[k], ruta[k + 1]));
+    return best;
+  };
+  // primero los de mayor volumen; cada uno al repartidor con menor desvío que aún tenga capacidad
+  items.sort((a, b) => b.puntos - a.puntos);
+  const ahora = new Date(), out = [];
+  items.forEach(it => {
+    const x = it.p.lat != null ? [it.p.lat, it.p.lng] : null;
+    let mejor = null, mc = Infinity;
+    Object.keys(carga).forEach(no => {
+      const c = carga[no];
+      if (c.puntos + it.puntos > cap) return;
+      const v = costo(c.pts, x) + c.puntos * 400; // leve preferencia por quien lleva menos
+      if (v < mc) { mc = v; mejor = c; }
+    });
+    let estado = 'propuesta', nota = '';
+    if (!disp.length) { estado = 'sin_repartidor'; nota = 'Nadie ha checado entrada'; }
+    else if (!mejor) { estado = 'sin_capacidad'; nota = 'Todos llegaron a su tope de ' + cap + ' puntos'; }
+    if (!x) nota = (nota ? nota + ' · ' : '') + 'Sin ubicación: revisa la dirección';
+    if (mejor) { mejor.puntos += it.puntos; if (x) mejor.pts.push(x); }
+    const fila = { rec_id: nextId_('REC', 6), fecha: fecha, order_id: String(it.o.orderId), order_number: String(it.o.orderNumber || ''), cliente: it.p.cliente,
+      direccion: it.p.direccion, lat: x ? x[0] : '', lng: x ? x[1] : '', volumen: it.volumen || 'sin clasificar', puntos: it.puntos,
+      no_empleado: mejor ? mejor.d.no_empleado : '', nombre: mejor ? mejor.d.nombre : '', carrier_id: mejor ? mejor.d.carrier_id : '', estado: estado, creada: ahora, nota: nota };
+    out.push(fila);
+  });
+  withLock_(() => out.forEach(f => append_('Recolecciones', f)));
+  let asignadas = 0;
+  if (modo === 'automatico') out.filter(f => f.estado === 'propuesta').forEach(f => { const r = rows_('Recolecciones').find(x => x.rec_id === f.rec_id); if (asignarRec_(r, null).ok) asignadas++; });
+  const prop = out.filter(f => f.estado === 'propuesta').length, prob = out.length - prop;
+  notificarOps_('recolecciones', modo === 'automatico' ? '📦 ' + asignadas + ' recolección(es) asignadas' : '📦 ' + prop + ' recolección(es) por aprobar',
+    (prob ? '⚠️ ' + prob + ' sin repartidor o sin capacidad · ' : '') + 'Revisa en Más → Recolecciones', fecha);
+  return { nuevas: out.length, propuestas: prop, problemas: prob, asignadas: asignadas, disponibles: disp.length };
+}
+
+function asignarRec_(r, u) {
+  if (!r.carrier_id) return { ok: false, error: 'Sin repartidor' };
+  const key = prop_('SHIPDAY_KEY');
+  const res = UrlFetchApp.fetch('https://api.shipday.com/orders/assign/' + encodeURIComponent(r.order_id) + '/' + encodeURIComponent(r.carrier_id),
+    { method: 'put', muteHttpExceptions: true, headers: { Authorization: 'Basic ' + key, Accept: 'application/json' } });
+  const ok = res.getResponseCode() >= 200 && res.getResponseCode() < 300;
+  update_('Recolecciones', r._row, ok ? { estado: 'asignada', resuelta: new Date(), resuelta_por: u ? u.no_empleado : 'auto' }
+    : { estado: 'error', nota: 'Shipday ' + res.getResponseCode() + ': ' + String(res.getContentText()).slice(0, 120) });
+  if (ok && r.no_empleado) notificar_(String(r.no_empleado), 'recoleccion', '📦 Nueva recolección: ' + r.cliente, (r.direccion || '') + ' · ya está en tu app de Shipday', r.rec_id);
+  return { ok: ok, error: ok ? '' : 'Shipday respondió ' + res.getResponseCode() };
+}
+
+function recoleccionAprobar_(req, u) {
+  const ids = req.todas ? rows_('Recolecciones').filter(r => fmt_(r.fecha, 'yyyy-MM-dd') === hoy_() && r.estado === 'propuesta').map(r => r.rec_id) : [req.rec_id];
+  let ok = 0; const errores = [];
+  ids.forEach(id => { const r = rows_('Recolecciones').find(x => x.rec_id === id); if (!r) return; const x = asignarRec_(r, u); if (x.ok) ok++; else errores.push(r.cliente + ': ' + x.error); });
+  bitacora_(u.no_empleado, 'aprobar_recolecciones', 'Recolecciones', ids.join(','), ok + ' ok');
+  return { asignadas: ok, errores: errores };
+}
+function recoleccionCambiar_(req, u) {
+  const r = rows_('Recolecciones').find(x => x.rec_id === req.rec_id);
+  if (!r) throw new Error('Recolección no encontrada');
+  if (r.estado === 'asignada') throw new Error('Ya está asignada en Shipday; cámbiala desde Shipday');
+  const p = req.no_empleado ? rows_('Personal').find(x => String(x.no_empleado) === String(req.no_empleado)) : null;
+  if (req.no_empleado && (!p || !idsShipday_(p).length)) throw new Error('Ese empleado no tiene cuenta de Shipday vinculada');
+  update_('Recolecciones', r._row, { no_empleado: p ? String(p.no_empleado) : '', nombre: p ? p.nombre : '', carrier_id: p ? idsShipday_(p)[0] : '', estado: p ? 'propuesta' : 'sin_repartidor', nota: 'Cambiada a mano' });
+  return true;
+}
+function recoleccionRechazar_(req, u) {
+  const r = rows_('Recolecciones').find(x => x.rec_id === req.rec_id);
+  if (!r) throw new Error('Recolección no encontrada');
+  update_('Recolecciones', r._row, { estado: 'descartada', resuelta: new Date(), resuelta_por: u.no_empleado });
+  return true;
+}
+function clienteVolumen_(req, u) {
+  tabsOperacion_();
+  const v = String(req.volumen || '').toLowerCase();
+  if (!PUNTOS_VOLUMEN[v]) throw new Error('Volumen inválido');
+  const c = clienteRec_(req.cliente, '');
+  update_('ClientesRecoleccion', c._row, { volumen: v });
+  // actualiza las propuestas de hoy de ese cliente
+  rows_('Recolecciones').filter(r => fmt_(r.fecha, 'yyyy-MM-dd') === hoy_() && normTxt_(r.cliente) === normTxt_(req.cliente) && r.estado !== 'asignada')
+    .forEach(r => update_('Recolecciones', r._row, { volumen: v, puntos: PUNTOS_VOLUMEN[v] }));
+  return true;
+}
+
+function recoleccionesVista_(fecha) {
+  tabsOperacion_();
+  asegurarTriggerReporte_();
+  const recs = rows_('Recolecciones').filter(r => fmt_(r.fecha, 'yyyy-MM-dd') === fecha).map(r => ({ rec_id: r.rec_id, order_number: r.order_number, cliente: r.cliente,
+    direccion: r.direccion, lat: r.lat === '' ? null : Number(r.lat), lng: r.lng === '' ? null : Number(r.lng), volumen: r.volumen, puntos: Number(r.puntos || 0),
+    no_empleado: String(r.no_empleado || ''), nombre: r.nombre, estado: r.estado, nota: r.nota, creada: fmt_(r.creada, 'HH:mm') }));
+  const disp = fecha === hoy_() ? repartidoresDisponibles_() : [];
+  return { fecha: fecha, modo: String(config_('RECOLECCION_MODO', 'aprobacion')), hasta: String(config_('RECOLECCION_HASTA', '12:00')),
+    capacidad: Number(config_('RECOLECCION_CAPACIDAD', 6)), recolecciones: recs, disponibles: disp.map(d => Object.assign(d, {
+      puntos: recs.filter(r => r.no_empleado === d.no_empleado && ['propuesta', 'asignada'].indexOf(r.estado) >= 0).reduce((s, r) => s + r.puntos, 0) })),
+    clientes: rows_('ClientesRecoleccion').map(c => ({ cliente: c.cliente, volumen: c.volumen || '' })).sort((a, b) => (!!a.volumen - !!b.volumen) || String(a.cliente).localeCompare(String(b.cliente))),
+    shipday: !!prop_('SHIPDAY_KEY') };
+}
+
+// ── Motos chicas: qué paradas se pueden hacer sin autopistas ──
+
+/** Para cada punto compara el tiempo desde la base con y sin autopistas (TomTom). Se guarda en AlcanceMoto 30 días. */
+function alcanceMotoChica_(req) {
+  tabsOperacion_();
+  const key = prop_('TOMTOM_KEY');
+  if (!key) throw new Error('Para revisar autopistas hace falta la key de TomTom');
+  const dep = req.deposito || BASE_;
+  const ratio = Number(req.ratio || 1.4), extra = Number(req.extra_min || 12);
+  const cache = {}; const lim = Date.now() - 30 * 864e5;
+  rows_('AlcanceMoto').forEach(r => { if (new Date(r.fecha).getTime() > lim) cache[r.clave] = r; });
+  const out = [], pend = [];
+  (req.puntos || []).forEach((p, i) => {
+    const clave = Number(p[0]).toFixed(4) + ',' + Number(p[1]).toFixed(4);
+    const c = cache[clave];
+    if (c) out[i] = { ok: c.chica_ok === 'SI', motivo: c.motivo, min_normal: Number(c.min_normal), min_sin: Number(c.min_sin_autopista) };
+    else pend.push({ i: i, p: p, clave: clave });
+  });
+  const base = 'https://api.tomtom.com/routing/1/calculateRoute/';
+  const nuevos = [];
+  for (let b = 0; b < pend.length; b += 3) {
+    const lote = pend.slice(b, b + 3), reqs = [];
+    lote.forEach(x => {
+      const loc = Number(dep[0]).toFixed(6) + ',' + Number(dep[1]).toFixed(6) + ':' + Number(x.p[0]).toFixed(6) + ',' + Number(x.p[1]).toFixed(6);
+      reqs.push({ url: base + loc + '/json?key=' + encodeURIComponent(key) + '&travelMode=motorcycle&traffic=false&routeRepresentation=summaryOnly', muteHttpExceptions: true });
+      reqs.push({ url: base + loc + '/json?key=' + encodeURIComponent(key) + '&travelMode=motorcycle&traffic=false&routeRepresentation=summaryOnly&avoid=motorways&avoid=tollRoads&sectionType=motorway', muteHttpExceptions: true });
+    });
+    const rr = UrlFetchApp.fetchAll(reqs);
+    lote.forEach((x, k) => {
+      const a = rr[2 * k], s = rr[2 * k + 1];
+      let n = null, m = null, sigue = false;
+      try { n = JSON.parse(a.getContentText()).routes[0].summary.travelTimeInSeconds / 60; } catch (e) {}
+      try { const js = JSON.parse(s.getContentText()); m = js.routes[0].summary.travelTimeInSeconds / 60; sigue = (js.routes[0].sections || []).some(z => /MOTORWAY/i.test(z.sectionType)); } catch (e) {}
+      if (n == null || m == null) { out[x.i] = { ok: true, motivo: 'sin_dato', min_normal: n, min_sin: m }; return; }
+      const malo = sigue || (m > n * ratio && m - n > extra);
+      const r = { ok: !malo, motivo: sigue ? 'solo_por_autopista' : malo ? 'rodeo_sin_autopista' : '', min_normal: Math.round(n), min_sin: Math.round(m) };
+      out[x.i] = r;
+      nuevos.push({ clave: x.clave, lat: x.p[0], lng: x.p[1], chica_ok: r.ok ? 'SI' : 'NO', motivo: r.motivo, min_normal: r.min_normal, min_sin_autopista: r.min_sin, fecha: new Date() });
+    });
+    if (b + 3 < pend.length) Utilities.sleep(700);
+  }
+  if (nuevos.length) withLock_(() => nuevos.forEach(n => append_('AlcanceMoto', n)));
+  return { puntos: out, consultas: pend.length * 2 };
 }
 
 // ── Shipday

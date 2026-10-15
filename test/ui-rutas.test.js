@@ -42,6 +42,10 @@ const srv = http.createServer((q, r) => {
   await click('.ruta-live >> nth=1'); await p.waitForSelector('.kpis'); await shot('pat-ruta-detalle');
   await click('.icon-btn[aria-label="Regresar"]'); await click('.icon-btn[aria-label="Regresar"]');
   await click('.mi:has-text("Repartidores en Shipday")'); await p.waitForSelector('select.input'); await shot('pat-shipday-vincular');
+  await click('.icon-btn[aria-label="Regresar"]');
+  await click('.mi:has-text("Recolecciones")'); await p.waitForSelector('.chip'); await shot('pat-recolecciones');
+  await click('.icon-btn[aria-label="Regresar"]');
+  await click('.mi:has-text("GPS de Shipday")'); await p.waitForSelector('.kpis'); await shot('pat-gps');
   console.log(errors.length ? 'ERRORES:\n' + errors.join('\n') : 'Sin errores de consola');
   await b.close(); srv.close();
 })().catch(e => { console.error(e); process.exit(1); });

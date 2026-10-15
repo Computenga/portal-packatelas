@@ -97,3 +97,22 @@ node test/ui.test.js carpeta  # recorre la app en modo demo y toma capturas
 - Cuando uno cambia a entregado o fallido, a patrón y admins les llega **un push por ruta** con el resumen y cuántos quedan.
 - Recálculo: desde la última parada visitada y la hora actual, TomTom (tráfico real) hasta las paradas que faltan + espera de cada una → fin estimado contra el límite de la ruta (el del ruteador, o `RUTA_LIMITE`). Si deja de alcanzar llega una alerta ⚠️ (y otra si vuelve a ir a tiempo).
 - Panel: Más → Rutas y reporte → *En vivo* (se actualiza solo; botón *Revisar ahora*). Toca una ruta para ver cada parada y envío.
+
+## Recolecciones automáticas (modo aprobación)
+
+- Cada 5 min, de `RECOLECCION_DESDE` a `RECOLECCION_HASTA` (12:00), se leen las órdenes activas de Shipday creadas hoy, sin repartidor, que digan `RECOLECCION_TEXTO` en el número o en el nombre de origen.
+- Disponibles = repartidores con entrada en el checador, sin salida, y con cuenta de Shipday vinculada.
+- Volumen por cliente en la pestaña *ClientesRecoleccion* (bajo 1 · medio 2 · alto 3 puntos; sin clasificar cuenta como medio). Tope por repartidor: `RECOLECCION_CAPACIDAD`.
+- Cada recolección va al repartidor con menor desvío (recorrido abierto desde Lassaga) que aún tenga capacidad. Lo ya asignado no se mueve.
+- `RECOLECCION_MODO`: `aprobacion` (se proponen y se aprueban en Más → Recolecciones; al aprobar se asigna en Shipday) · `automatico` · `apagado`.
+- Si Shipday no trae coordenadas del origen se geocodifica la dirección (Google Maps de Apps Script) y se guarda por cliente.
+
+## GPS de Shipday (prueba)
+
+- Cada 5 min se guarda en *GpsLog* la última ubicación conocida de cada repartidor (`/carriers`). Sin alertas. Más → GPS de Shipday muestra por repartidor qué tan seguido cambia y las paradas de 15+ min (detenido / sin señal / en la base). Se apaga con `GPS_PRUEBA = NO`.
+
+## Motos chicas (ruteador)
+
+- En el ruteador: *Motos chicas*, *Altitud máx.* (m arriba de la base) y *% más lento* sin vías rápidas.
+- Paradas solo para moto grande: más altas que la base + altitud máx. (Open-Meteo) o que solo se alcanzan por autopista / carriles centrales, o con un rodeo grande sin ellas (TomTom, `avoid=motorways`; resultado guardado 30 días en *AlcanceMoto*).
+- Las rutas de moto chica usan su propia matriz y TomTom les calcula el recorrido evitando autopistas y casetas. Se marcan con 🛵 en la tabla, el ticket y WhatsApp.

@@ -145,6 +145,12 @@ details.route li span{color:var(--muted)}
         <div><label>Espera/parada</label><input type="number" id="wait" min="0" value="10"></div>
         <div><label>+min/envío extra</label><input type="number" id="extra" min="0" value="2"></div>
       </div>
+      <div class="row3">
+        <div><label>Motos chicas</label><input type="number" id="small" min="0" value="0"></div>
+        <div><label>Altitud máx. (m)</label><input type="number" id="altMax" min="0" step="10" value="120"></div>
+        <div><label>% más lento</label><input type="number" id="smallPen" min="0" step="5" value="15"></div>
+      </div>
+      <div class="hint">Motos chicas: no van por autopistas ni carriles centrales (lo decide TomTom) ni a paradas que estén más de “Altitud máx.” metros arriba de la base (cerros). “% más lento” = cuánto se tardan más por calles sin vías rápidas.</div>
       <div class="hint">La espera es en minutos. “+min/envío extra” se suma cuando una parada tiene varios envíos.</div>
     </div>
 
@@ -217,7 +223,7 @@ function replaceDur(r,d,i,y,T,svc){const x=r[i],prev=i===0?0:r[i-1];let nd=d-T[p
 function prefixDur(r,T,svc){const out=new Array(r.length);let t=0,p=0;for(let k=0;k<r.length;k++){t+=T[p][r[k]]+svc[r[k]];out[k]=t;p=r[k];}return out;}
 function suffixDur(r,T,svc){const n=r.length,out=new Array(n);if(!n)return out;out[n-1]=0;for(let k=n-2;k>=0;k--){out[k]=T[r[k]][r[k+1]]+svc[r[k+1]]+out[k+1];}return out;}
 
-function regretInsert(routes,durs,list,T,svc,cost){
+function regretInsert(routes,durs,list,TT,svc,cost){
   const un=list.slice();
   while(un.length){
     let bi=-1,br=-1,bp=-1,bd=0,breg=-Infinity,bb1=Infinity;
@@ -225,7 +231,7 @@ function regretInsert(routes,durs,list,T,svc,cost){
       const x=un[u];let b1=Infinity,b2=Infinity,r1=-1,p1=-1,d1=0;
       for(let r=0;r<routes.length;r++){
         const rt=routes[r],d=durs[r],c0=cost(d);let rb=Infinity,rp=0,rd=0;
-        for(let p=0;p<=rt.length;p++){const nd=insertDur(rt,d,p,x,T,svc);const dc=cost(nd)-c0;if(dc<rb){rb=dc;rp=p;rd=nd;}}
+        for(let p=0;p<=rt.length;p++){const nd=insertDur(rt,d,p,x,TT[r],svc);const dc=cost(nd)-c0;if(dc<rb){rb=dc;rp=p;rd=nd;}}
         if(rb<b1){b2=b1;b1=rb;r1=r;p1=rp;d1=rd;}else if(rb<b2){b2=rb;}
       }
       const reg=(b2===Infinity?1e15:b2-b1);
@@ -257,37 +263,37 @@ function intraOpt(r,T,svc,deadline){
   return{r:best,d:bd};
 }
 
-function localSearch(routes,durs,T,svc,cost,deadline){
+function localSearch(routes,durs,TT,svc,cost,deadline){
   const K=routes.length;let any=true,guard=0;
   while(any&&guard++<100&&Date.now()<deadline){
     any=false;
-    for(let a=0;a<K;a++){const o=intraOpt(routes[a],T,svc,deadline);if(o.d<durs[a]-1e-6){routes[a]=o.r;durs[a]=o.d;any=true;}}
+    for(let a=0;a<K;a++){const o=intraOpt(routes[a],TT[a],svc,deadline);if(o.d<durs[a]-1e-6){routes[a]=o.r;durs[a]=o.d;any=true;}}
     // relocate entre rutas
     for(let a=0;a<K;a++){for(let i=0;i<routes[a].length;i++){
-      const ra=routes[a],x=ra[i],da=durs[a],dr=removeDur(ra,da,i,T,svc),gain=cost(dr)-cost(da);
+      const ra=routes[a],x=ra[i],da=durs[a],dr=removeDur(ra,da,i,TT[a],svc),gain=cost(dr)-cost(da);
       let best=-1e-6,bb=-1,bp=0,bd=0;
       for(let b=0;b<K;b++){if(b===a)continue;const rb=routes[b],db=durs[b],cb=cost(db);
-        for(let p=0;p<=rb.length;p++){const nd=insertDur(rb,db,p,x,T,svc);const dl=gain+cost(nd)-cb;if(dl<best){best=dl;bb=b;bp=p;bd=nd;}}}
+        for(let p=0;p<=rb.length;p++){const nd=insertDur(rb,db,p,x,TT[b],svc);const dl=gain+cost(nd)-cb;if(dl<best){best=dl;bb=b;bp=p;bd=nd;}}}
       if(bb>=0){ra.splice(i,1);durs[a]=dr;routes[bb].splice(bp,0,x);durs[bb]=bd;any=true;i--;}
     }}
     // intercambio entre rutas
     for(let a=0;a<K;a++){for(let b=a+1;b<K;b++){const ra=routes[a],rb=routes[b];
       for(let i=0;i<ra.length;i++){for(let j=0;j<rb.length;j++){
-        const x=ra[i],y=rb[j];const na=replaceDur(ra,durs[a],i,y,T,svc),nb=replaceDur(rb,durs[b],j,x,T,svc);
+        const x=ra[i],y=rb[j];const na=replaceDur(ra,durs[a],i,y,TT[a],svc),nb=replaceDur(rb,durs[b],j,x,TT[b],svc);
         const dl=cost(na)+cost(nb)-cost(durs[a])-cost(durs[b]);
         if(dl<-1e-6){ra[i]=y;rb[j]=x;durs[a]=na;durs[b]=nb;any=true;}
       }}
     }}
     // intercambio de colas (2-opt*)
     for(let a=0;a<K;a++){for(let b=a+1;b<K;b++){
-      const ra=routes[a],rb=routes[b];const pa=prefixDur(ra,T,svc),pb=prefixDur(rb,T,svc),sa=suffixDur(ra,T,svc),sb=suffixDur(rb,T,svc);
+      const ra=routes[a],rb=routes[b],TA=TT[a],TB=TT[b];const pa=prefixDur(ra,TA,svc),pb=prefixDur(rb,TB,svc),sa=suffixDur(ra,TB,svc),sb=suffixDur(rb,TA,svc);
       const c0=cost(durs[a])+cost(durs[b]);let best=-1e-6,bi=-2,bj=-2,bA=0,bB=0;
       for(let i=-1;i<ra.length;i++){const xa=i<0?0:ra[i],preA=i<0?0:pa[i];
         for(let j=-1;j<rb.length;j++){
           if(i===ra.length-1&&j===rb.length-1)continue;if(i===-1&&j===-1)continue;
           const xb=j<0?0:rb[j],preB=j<0?0:pb[j];
-          const nA=preA+(j+1<rb.length?T[xa][rb[j+1]]+svc[rb[j+1]]+sb[j+1]:0);
-          const nB=preB+(i+1<ra.length?T[xb][ra[i+1]]+svc[ra[i+1]]+sa[i+1]:0);
+          const nA=preA+(j+1<rb.length?TA[xa][rb[j+1]]+svc[rb[j+1]]+sb[j+1]:0);
+          const nB=preB+(i+1<ra.length?TB[xb][ra[i+1]]+svc[ra[i+1]]+sa[i+1]:0);
           const dl=cost(nA)+cost(nB)-c0;if(dl<best){best=dl;bi=i;bj=j;bA=nA;bB=nB;}
         }}
       if(bi>-2){routes[a]=ra.slice(0,bi+1).concat(rb.slice(bj+1));routes[b]=rb.slice(0,bj+1).concat(ra.slice(bi+1));durs[a]=bA;durs[b]=bB;any=true;}
@@ -295,7 +301,7 @@ function localSearch(routes,durs,T,svc,cost,deadline){
   }
 }
 
-function solve(T,svc,nodes,K,L,ms,seed){
+function solve(T,svc,nodes,K,L,ms,seed,opt){
   const t0=Date.now(),deadline=t0+ms;const rnd=mulberry32(seed||12345);
   if(!nodes.length)return{routes:[],durs:[],iters:0};
   const PEN=40,BAL=4;const cost=function(d){const o=d>L?d-L:0;const r=d/L;return d+PEN*o+20*o*o/L+BAL*L*r*r*r*r*r*r;};
@@ -305,9 +311,14 @@ function solve(T,svc,nodes,K,L,ms,seed){
   for(const x of nodes)minD.set(x,sym(0,x));
   for(let k=0;k<K;k++){let bx=-1,bv=-1;for(const x of nodes){if(isSeed.has(x))continue;const v=minD.get(x);if(v>bv){bv=v;bx=x;}}
     seeds.push(bx);isSeed.add(bx);for(const x of nodes){const v=sym(bx,x);if(v<minD.get(x))minD.set(x,v);}}
-  let routes=seeds.map(function(s){return[s];});let durs=routes.map(function(r){return routeDur(r,T,svc);});
-  regretInsert(routes,durs,nodes.filter(function(x){return!isSeed.has(x);}),T,svc,cost);
-  localSearch(routes,durs,T,svc,cost,deadline+ms);
+  // Motos chicas: las primeras S rutas usan su propia matriz (sin vías rápidas; paradas prohibidas = muy caras)
+  const Ts=opt&&opt.Ts,SM=Ts?Math.max(0,Math.min(opt.S||0,K)):0;
+  const TT=[];for(let k=0;k<K;k++)TT.push(k<SM?Ts:T);
+  if(SM){const okS=seeds.filter(function(x){return Ts[0][x]<1e6;}),noS=seeds.filter(function(x){return Ts[0][x]>=1e6;});
+    const ord=[];for(let k=0;k<K;k++)ord.push(k<SM?(okS.length?okS.shift():noS.shift()):(noS.length?noS.shift():okS.shift()));seeds.length=0;ord.forEach(function(x){seeds.push(x);});}
+  let routes=seeds.map(function(s){return[s];});let durs=routes.map(function(r,k){return routeDur(r,TT[k],svc);});
+  regretInsert(routes,durs,nodes.filter(function(x){return!isSeed.has(x);}),TT,svc,cost);
+  localSearch(routes,durs,TT,svc,cost,deadline+ms);
   const tot=function(D){let s=0;for(const d of D)s+=cost(d);return s;};
   const mx=function(D){let m=0;for(const d of D)if(d>m)m=d;return m;};
   const better=function(D,C,bD,bC){const a=mx(D),b=mx(bD);if(a<b-30)return true;if(a>b+30)return false;return C<bC-1e-6;};
@@ -318,7 +329,7 @@ function solve(T,svc,nodes,K,L,ms,seed){
     const R=cur.routes.map(function(r){return r.slice();});
     const removed=new Set();
     const q=Math.max(2,Math.min(nodes.length-1,Math.round(nodes.length*(0.06+0.14*rnd()))));
-    if(rnd()<0.5){let w=0;for(let k=1;k<R.length;k++)if(routeDur(R[k],T,svc)>routeDur(R[w],T,svc))w=k;
+    if(rnd()<0.5){let w=0;for(let k=1;k<R.length;k++)if(routeDur(R[k],TT[k],svc)>routeDur(R[w],TT[w],svc))w=k;
       const take=Math.min(R[w].length,Math.ceil(q/2));const pool=R[w].slice();
       for(let t=0;t<take;t++){const i=Math.floor(rnd()*pool.length);removed.add(pool.splice(i,1)[0]);}}
     const all=[];R.forEach(function(r){r.forEach(function(x){if(!removed.has(x))all.push(x);});});
@@ -326,16 +337,16 @@ function solve(T,svc,nodes,K,L,ms,seed){
       all.sort(function(a,b){return sym(c,a)-sym(c,b);});
       for(let t=0;t<all.length&&removed.size<q;t++)removed.add(all[t]);}
     for(let k=0;k<R.length;k++)R[k]=R[k].filter(function(x){return!removed.has(x);});
-    const D=R.map(function(r){return routeDur(r,T,svc);});
+    const D=R.map(function(r,k){return routeDur(r,TT[k],svc);});
     const rem=Array.from(removed);for(let i=rem.length-1;i>0;i--){const j=Math.floor(rnd()*(i+1));const t=rem[i];rem[i]=rem[j];rem[j]=t;}
-    regretInsert(R,D,rem,T,svc,cost);
-    localSearch(R,D,T,svc,cost,deadline+ms*0.25);
+    regretInsert(R,D,rem,TT,svc,cost);
+    localSearch(R,D,TT,svc,cost,deadline+ms*0.25);
     const C=tot(D);const frac=Math.min(1,(Date.now()-t0)/ms);
     if(C<curC*(1+0.01*(1-frac))){cur={routes:R,durs:D};curC=C;}
     if(better(D,C,best.durs,bestC)){best={routes:R.map(function(r){return r.slice();}),durs:D.slice()};bestC=C;}
   }
-  best.durs=best.routes.map(function(r){return routeDur(r,T,svc);});
-  best.iters=iters;
+  best.durs=best.routes.map(function(r,k){return routeDur(r,TT[k],svc);});
+  best.iters=iters;best.S=SM;
   return best;
 }
 /*CORE-END*/
@@ -375,14 +386,14 @@ let worker=null;
 function getWorker(){
   if(worker)return worker;
   const fns=[mulberry32,routeDur,insertDur,removeDur,replaceDur,prefixDur,suffixDur,regretInsert,intraOpt,localSearch,solve];
-  const src=fns.map(f=>f.toString()).join('\n')+'\nonmessage=function(e){var a=e.data;postMessage(solve(a.T,a.svc,a.nodes,a.K,a.L,a.ms,a.seed));};';
+  const src=fns.map(f=>f.toString()).join('\n')+'\nonmessage=function(e){var a=e.data;postMessage(solve(a.T,a.svc,a.nodes,a.K,a.L,a.ms,a.seed,a.opt));};';
   worker=new Worker(URL.createObjectURL(new Blob([src],{type:'text/javascript'})));
   return worker;
 }
-function solveAsync(T,svc,nodes,K,L,ms,seed){
+function solveAsync(T,svc,nodes,K,L,ms,seed,opt){
   return new Promise(res=>{
-    try{const w=getWorker();w.onmessage=e=>res(e.data);w.onerror=()=>{worker=null;res(solve(T,svc,nodes,K,L,ms,seed));};w.postMessage({T,svc,nodes,K,L,ms,seed});}
-    catch(e){res(solve(T,svc,nodes,K,L,ms,seed));}
+    try{const w=getWorker();w.onmessage=e=>res(e.data);w.onerror=()=>{worker=null;res(solve(T,svc,nodes,K,L,ms,seed,opt));};w.postMessage({T,svc,nodes,K,L,ms,seed,opt});}
+    catch(e){res(solve(T,svc,nodes,K,L,ms,seed,opt));}
   });
 }
 
@@ -395,10 +406,10 @@ function refreshFactor(){if(S.factorTouched)return;const h=parseInt(($('tStart')
 function readCfg(){
   const date=$('date').value;const start=new Date(`${date}T${$('tStart').value}:00`),end=new Date(`${date}T${$('tEnd').value}:00`);
   return{date,start,end,K:Math.max(1,parseInt($('drivers').value)||1),wait:Math.max(0,parseFloat($('wait').value)||0),extra:Math.max(0,parseFloat($('extra').value)||0),
-    group:$('group').checked,factor:parseFloat($('factor').value)||1.5,adj:parseFloat($('adj').value)||1,useTT:!!(S.srv&&S.srv.tomtom),ttMode:$('ttMode').value,
+    group:$('group').checked,factor:parseFloat($('factor').value)||1.5,adj:parseFloat($('adj').value)||1,small:Math.max(0,parseInt($('small').value)||0),altMax:Math.max(0,parseFloat($('altMax').value)||120),smallPen:Math.max(0,parseFloat($('smallPen').value)||0)/100,useTT:!!(S.srv&&S.srv.tomtom),ttMode:$('ttMode').value,
     ms:parseInt($('quality').value)||4000,pw:Math.min(80,Math.max(40,parseFloat($('pw').value)||72)),fs:parseFloat($('fs').value)||1.15,skipDone:$('skipDone').checked,depot:{lat:parseFloat($('dLat').value),lng:parseFloat($('dLng').value)}};
 }
-const PERSIST=['tStart','tEnd','drivers','wait','extra','ttMode','adj','quality','pw','fs'];
+const PERSIST=['tStart','tEnd','drivers','wait','extra','ttMode','adj','quality','pw','fs','small','altMax','smallPen'];
 function loadSettings(){
   PERSIST.forEach(id=>{const v=store.get('f.'+id,null);if(v!==null)$(id).value=v;});
   ['group','skipDone'].forEach(id=>{const v=store.get('f.'+id,null);if(v!==null)$(id).checked=v;});
@@ -587,7 +598,7 @@ function ttError(status,j){
 }
 async function evalTomTom(plan,pts,cfg,onProg){
   const idx=[];const rutas=[];
-  plan.routes.forEach((r,ri)=>{if(r.length){idx.push(ri);rutas.push({locs:[pts[0],...r.map(x=>pts[x])].map(p=>[p.lat,p.lng])});}});
+  plan.routes.forEach((r,ri)=>{if(r.length){idx.push(ri);rutas.push({chica:ri<(plan.S||0),locs:[pts[0],...r.map(x=>pts[x])].map(p=>[p.lat,p.lng])});}});
   const dep=cfg.start.getTime()>Date.now()+60000?isoLocal(cfg.start):'now';
   const res=await api('tomtomRutas',{rutas,departAt:dep,mode:cfg.ttMode});
   const out=plan.routes.map(()=>null);
@@ -595,23 +606,39 @@ async function evalTomTom(plan,pts,cfg,onProg){
   onProg&&onProg(1);
   return out;
 }
-function calibFactor(plan,ev,M){
+function calibFactor(plan,ev,M,chicas){
   let tt=0,raw=0;
-  plan.routes.forEach((r,ri)=>{if(!r.length||!ev[ri])return;let p=0;r.forEach((x,k)=>{tt+=ev[ri][k].sec;raw+=M.dur[p][x];p=x;});});
+  plan.routes.forEach((r,ri)=>{if(!r.length||!ev[ri]||(chicas?ri>=(plan.S||0):ri<(plan.S||0)))return;let p=0;r.forEach((x,k)=>{tt+=ev[ri][k].sec;raw+=M.dur[p][x];p=x;});});
   return raw>0?tt/raw:null;
 }
 
+// ===== Altitud (Open-Meteo, gratis) =====
+const ELEV={};
+async function elevaciones(pts){
+  const key=p=>p.lat.toFixed(4)+','+p.lng.toFixed(4);
+  const falta=[...new Set(pts.map(key))].filter(k=>!(k in ELEV));
+  for(let i=0;i<falta.length;i+=100){
+    const lote=falta.slice(i,i+100);
+    const r=await fetch(`https://api.open-meteo.com/v1/elevation?latitude=${lote.map(k=>k.split(',')[0]).join(',')}&longitude=${lote.map(k=>k.split(',')[1]).join(',')}`);
+    if(!r.ok)throw new Error('Open-Meteo '+r.status);
+    const j=await r.json();lote.forEach((k,n)=>ELEV[k]=j.elevation?.[n]??null);
+    if(i+100<falta.length)await sleep(300);
+  }
+  return pts.map(p=>ELEV[key(p)]);
+}
+
 // ===== Duraciones reales y horarios =====
-function planDurs(plan,T,svc,cfg){
+function planDurs(plan,T,svc,cfg,Ts){
   return plan.routes.map((r,ri)=>{
     if(!r.length)return 0;
     if(plan.ev&&plan.ev[ri]){let t=0;r.forEach((x,k)=>{t+=plan.ev[ri][k].sec*cfg.adj+svc[x];});return t;}
-    return routeDur(r,T,svc);
+    return routeDur(r,ri<(plan.S||0)&&Ts?Ts:T,svc);
   });
 }
-function buildSchedule(plan,T,svc,M,stops,cfg){
+function buildSchedule(plan,T0,svc,M,stops,cfg,Ts){
   const used=plan.routes.map((r,ri)=>({r,ri})).filter(o=>o.r.length);
   const list=used.map(o=>{
+    const chica=o.ri<(plan.S||0),T=chica&&Ts?Ts:T0;
     let t=cfg.start.getTime(),p=0,km=0;const out=[];let geom=[[cfg.depot.lat,cfg.depot.lng]];
     o.r.forEach((x,k)=>{
       const leg=plan.ev&&plan.ev[o.ri]?plan.ev[o.ri][k]:null;
@@ -623,7 +650,7 @@ function buildSchedule(plan,T,svc,M,stops,cfg){
     });
     const end=new Date(t);
     const durMin=(end-cfg.start)/60000;
-    return{total:used.length,stops:out,start:cfg.start,end,deadline:cfg.end,km,durMin,
+    return{chica,total:used.length,stops:out,start:cfg.start,end,deadline:cfg.end,km,durMin,
       latest:new Date(Math.max(cfg.start.getTime(),cfg.end.getTime()-durMin*60000)),
       parcels:out.reduce((a,s)=>a+s.st.parcels.length,0),slackMin:(cfg.end-end)/60000,geom,traffic:!!(plan.ev&&plan.ev[o.ri])};
   });
@@ -650,7 +677,7 @@ async function optimize(){
     if(dups.length)warnings.push(`${dups.length} envío(s) repetidos en el archivo se tomaron una sola vez: ${dups.slice(0,8).join(', ')}`);
     if(bad.length)warnings.push(`${bad.length} envío(s) sin coordenadas válidas quedaron fuera: ${bad.slice(0,12).join(', ')}${bad.length>12?'…':''}`);
     if(outside.length)warnings.push(`${outside.length} envío(s) con coordenadas fuera de CDMX/Edomex (revísalas): ${outside.slice(0,8).join(', ')}${outside.length>8?'…':''}`);
-    const pts=[cfg.depot,...stops];const n=stops.length;
+    const pts=[cfg.depot,...stops];const n=stops.length;let ttCallsPre=0;
     const limit=(cfg.end-cfg.start)/1000;
     const svc=[0,...stops.map(s=>s.svcMin*60)];
 
@@ -658,15 +685,35 @@ async function optimize(){
     const M=await getMatrix(pts,p=>setProg(p*0.4));
     if(M.filledPct>0.02)warnings.push(`OSRM no respondió para ${Math.round(M.filledPct*100)}% de los tramos; esos se estimaron en línea recta (menos preciso).`);
 
+    // Motos chicas: paradas a las que solo puede ir una moto grande (cerro por altitud o solo por autopista)
+    const restr=new Map();
+    if(cfg.small>0){
+      setStatus('Revisando altitud de las paradas (motos chicas)…');
+      try{const el=await elevaciones(pts);const base=el[0];
+        if(base!=null)stops.forEach((s,i)=>{const e=el[i+1];if(e!=null&&e-base>cfg.altMax)restr.set(i+1,`cerro: ${Math.round(e-base)} m arriba de la base`);});}
+      catch(e){warnings.push('No se pudo consultar la altitud de las paradas; las motos chicas no consideran cerros.');}
+      if(cfg.useTT){
+        setStatus('Revisando qué paradas solo se alcanzan por autopista (TomTom)…');
+        try{const r=await api('alcanceMotoChica',{puntos:stops.map(s=>[s.lat,s.lng]),deposito:[cfg.depot.lat,cfg.depot.lng]});
+          r.puntos.forEach((x,i)=>{if(x&&!x.ok&&!restr.has(i+1))restr.set(i+1,x.motivo==='solo_por_autopista'?'solo se llega por autopista':`sin autopista tarda ${x.min_sin} min vs ${x.min_normal}`);});
+          if(r.consultas)ttCallsPre+=r.consultas;}
+        catch(e){warnings.push('No se pudo revisar autopistas con TomTom: '+e.message);}
+      }else warnings.push('Sin key de TomTom no se pueden evitar autopistas ni carriles centrales: las motos chicas solo evitan cerros.');
+    }
     let f=cfg.factor*cfg.adj,trafficSrc=`Estimado sin TomTom: OSRM × factor ${cfg.factor.toFixed(2)}`,ttOk=cfg.useTT,ttCalls=0;
     const scale=ff=>M.dur.map(row=>row.map(v=>v*ff));
     let T=scale(f);
-    const reachable=()=>{const a=[],u=[];for(let i=1;i<=n;i++)(T[0][i]+svc[i]>limit?u:a).push(i);return{a,u};};
+    let fS=null;
+    const smallTs=()=>{if(!cfg.small)return null;const k=fS||f*(1+cfg.smallPen);return M.dur.map((row,i)=>row.map((v,j)=>(restr.has(i)||restr.has(j))&&i!==j?1e7:v*k));};
+    let Ts=smallTs();
+    const smallAll=cfg.small>=cfg.K;
+    const opt=()=>cfg.small?{Ts,S:cfg.small}:null;
+    const reachable=()=>{const a=[],u=[];for(let i=1;i<=n;i++)((T[0][i]+svc[i]>limit)||(smallAll&&restr.has(i))?u:a).push(i);return{a,u};};
     let {a:active}=reachable();
     const K=Math.min(cfg.K,Math.max(1,active.length));
 
     setStatus(`Armando ${K} ruta(s)…`);setProg(0.45);
-    let planK=await solveAsync(T,svc,active,K,limit,cfg.ms,7);
+    let planK=await solveAsync(T,svc,active,K,limit,cfg.ms,7,opt());
 
     if(ttOk){
       try{
@@ -674,13 +721,14 @@ async function optimize(){
         for(let round=0;;round++){
           setStatus(`Midiendo tráfico real con TomTom (vuelta ${round+1})…`);
           planK.ev=await evalTomTom(planK,pts,cfg,p=>setProg(0.5+p*0.15));ttCalls+=planK.routes.filter(r=>r.length).length;
-          fCal=calibFactor(planK,planK.ev,M);if(!fCal)break;
+          fCal=calibFactor(planK,planK.ev,M,false);const fc=calibFactor(planK,planK.ev,M,true);if(fc)fS=fc*cfg.adj;
+          if(!fCal){Ts=smallTs();break;}
           const fNew=fCal*cfg.adj;const changed=Math.abs(fNew-f)/f>0.06;
-          f=fNew;T=scale(f);
+          f=fNew;T=scale(f);Ts=smallTs();
           if(!changed||round>=2)break;
           ({a:active}=reachable());
           setStatus('Reoptimizando con el tráfico medido…');
-          planK=await solveAsync(T,svc,active,Math.min(K,Math.max(1,active.length)),limit,cfg.ms,11+round);
+          planK=await solveAsync(T,svc,active,Math.min(K,Math.max(1,active.length)),limit,cfg.ms,11+round,opt());
         }
         if(fCal){const h=cfg.start.getHours();const cal=store.get('calib',{});cal[h]=cal[h]?cal[h]*0.5+fCal*0.5:fCal;store.set('calib',cal);
           trafficSrc=`TomTom (tráfico ${cfg.start.getTime()>Date.now()+60000?'previsto para la hora de salida':'en tiempo real'}) · factor medido ×${fCal.toFixed(2)}`;
@@ -691,7 +739,7 @@ async function optimize(){
     const unreachStops=unreach.map(i=>stops[i-1]);
     active=active.filter(i=>!unreach.includes(i));
 
-    const dK=planDurs(planK,T,svc,cfg);const maxK=Math.max(0,...dK);
+    const dK=planDurs(planK,T,svc,cfg,Ts);const maxK=Math.max(0,...dK);
     const feasibleK=maxK<=limit+1;
     let planN=null,N=K;
 
@@ -700,10 +748,10 @@ async function optimize(){
       let k=Math.max(K+1,Math.ceil(sumK/limit));
       while(k<=active.length){
         setStatus(`No alcanza con ${K}. Probando con ${k} repartidores…`);setProg(0.7);
-        const p=await solveAsync(T,svc,active,k,limit,Math.max(1200,cfg.ms*0.6),100+k);
-        let d=planDurs(p,T,svc,cfg);
+        const p=await solveAsync(T,svc,active,k,limit,Math.max(1200,cfg.ms*0.6),100+k,opt());
+        let d=planDurs(p,T,svc,cfg,Ts);
         if(Math.max(...d)<=limit+1){
-          if(ttOk){try{setStatus(`Validando ${k} rutas con TomTom…`);p.ev=await evalTomTom(p,pts,cfg,null);ttCalls+=k;d=planDurs(p,T,svc,cfg);}catch(err){ttOk=false;p.ev=null;warnings.push(err.message);}}
+          if(ttOk){try{setStatus(`Validando ${k} rutas con TomTom…`);p.ev=await evalTomTom(p,pts,cfg,null);ttCalls+=k;d=planDurs(p,T,svc,cfg,Ts);}catch(err){ttOk=false;p.ev=null;warnings.push(err.message);}}
           if(Math.max(...d)<=limit+1){planN=p;N=k;break;}
         }
         k++;
@@ -711,9 +759,9 @@ async function optimize(){
       if(planN&&N>K+1){
         for(let k2=N-1;k2>K;k2--){
           setStatus(`Verificando si bastan ${k2}…`);
-          const p=await solveAsync(T,svc,active,k2,limit,Math.max(1200,cfg.ms*0.6),300+k2);
-          let d=planDurs(p,T,svc,cfg);if(Math.max(...d)>limit+1)break;
-          if(ttOk){try{p.ev=await evalTomTom(p,pts,cfg,null);ttCalls+=k2;d=planDurs(p,T,svc,cfg);}catch(err){break;}}
+          const p=await solveAsync(T,svc,active,k2,limit,Math.max(1200,cfg.ms*0.6),300+k2,opt());
+          let d=planDurs(p,T,svc,cfg,Ts);if(Math.max(...d)>limit+1)break;
+          if(ttOk){try{p.ev=await evalTomTom(p,pts,cfg,null);ttCalls+=k2;d=planDurs(p,T,svc,cfg,Ts);}catch(err){break;}}
           if(Math.max(...d)>limit+1)break;planN=p;N=k2;
         }
       }
@@ -726,15 +774,17 @@ async function optimize(){
       for(let k=K-1;k>=Math.max(1,Math.ceil(sumK/limit))&&K-k<=4;k--){
         setStatus(`Revisando si alcanzan ${k} repartidores…`);
         const p=await solveAsync(T,svc,active,k,limit,Math.max(800,cfg.ms*0.35),500+k);
-        const d=planDurs(p,T,svc,cfg);if(Math.max(...d)<=limit*0.95)fewer=k;else break;
+        const d=planDurs(p,T,svc,cfg,Ts);if(Math.max(...d)<=limit*0.95)fewer=k;else break;
       }
     }
 
-    const schedK=buildSchedule(planK,T,svc,M,stops,cfg);
-    const schedN=planN?buildSchedule(planN,T,svc,M,stops,cfg):null;
-    S.result={cfg,K,N,feasibleK,planK:{sched:schedK},planN:schedN?{sched:schedN}:null,maxK,limit,unreachStops,warnings,trafficSrc,fewer,parcelCount,nStops:n,ttCalls,noPlanN:!feasibleK&&!planN};
+    const schedK=buildSchedule(planK,T,svc,M,stops,cfg,Ts);
+    const schedN=planN?buildSchedule(planN,T,svc,M,stops,cfg,Ts):null;
+    const restrList=[...restr.entries()].map(([i,m])=>({st:stops[i-1],motivo:m}));
+    if(cfg.small&&[...(schedN||schedK)].some(r=>r.chica&&r.stops.some(o=>restr.has(stops.indexOf(o.st)+1))))warnings.push('Alguna moto chica quedó con una parada difícil porque no hubo otra opción; revisa las rutas marcadas.');
+    S.result={restrList,cfg,K,N,feasibleK,planK:{sched:schedK},planN:schedN?{sched:schedN}:null,maxK,limit,unreachStops,warnings,trafficSrc,fewer,parcelCount,nStops:n,ttCalls,noPlanN:!feasibleK&&!planN};
     S.view=schedN?'needed':'given';
-    renderResult();setStatus(`Listo · ${hhmm(new Date())}`+(ttCalls?` · ${ttCalls} consultas TomTom`:''));setProg(1);
+    renderResult();setStatus(`Listo · ${hhmm(new Date())}`+((ttCalls+ttCallsPre)?` · ${ttCalls+ttCallsPre} consultas TomTom`:''));setProg(1);
   }catch(err){
     setStatus('');setProg(0);
     $('results').innerHTML=`<div class="alert bad">${esc(err.message)}</div>`+warnings.map(w=>`<div class="alert warn">${esc(w)}</div>`).join('');
@@ -760,6 +810,9 @@ function renderResult(){
   }
   if(R.unreachStops.length)h+=`<div class="alert bad"><b>${R.unreachStops.length} parada(s) imposibles</b> en ese horario (solo el traslado desde Lassaga ya rebasa la hora límite): ${esc(R.unreachStops.map(s=>s.parcels.map(p=>p.id).join('/')).join(', '))}</div>`;
   R.warnings.forEach(w=>{h+=`<div class="alert warn">${esc(w)}</div>`;});
+  if(R.cfg.small){const nCh=sched.filter(s=>s.chica).length;
+    h+=`<div class="alert info"><b>🛵 ${nCh} ruta(s) para moto chica</b> (sin autopistas, carriles centrales ni cerros). ${R.restrList.length?`${R.restrList.length} parada(s) quedaron solo para moto grande.`:'Ninguna parada requiere moto grande.'}`+
+      (R.restrList.length?`<details style="margin-top:6px"><summary>Ver paradas solo para moto grande</summary><ul style="margin:6px 0 0 18px">${R.restrList.map(x=>`<li>${esc(x.st.parcels.map(p=>p.id).join(', '))} · ${esc(x.st.dir||'')} — <i>${esc(x.motivo)}</i></li>`).join('')}</ul></details>`:'')+`</div>`;}
   const tp=sched.reduce((a,s)=>a+s.parcels,0),ts=sched.reduce((a,s)=>a+s.stops.length,0);
   h+=`<div class="chips">
     <div class="chip"><small>Rutas</small><strong>${sched.length}</strong></div>
@@ -772,10 +825,10 @@ function renderResult(){
   <div class="hint" style="margin-bottom:6px">Ordenadas por <b>prioridad de despacho</b>: la ruta 1 es la más larga y debe salir primero; la última es la más corta y puede salir al final. *Termina = saliendo a la hora de salida indicada.</div>
   <div class="tblwrap"><table class="tbl"><thead><tr><th>Prioridad</th><th>Paradas</th><th>Envíos</th><th>Km</th><th>Duración</th><th>Salir a más tardar</th><th>Termina*</th><th>Holgura</th><th>Estado</th><th>Repartidor</th><th></th></tr></thead><tbody>`;
   sched.forEach((s,i)=>{const ok=s.slackMin>=-0.5;
-    h+=`<tr data-i="${i}"><td><span class="dot" style="background:${s.color}"></span>Ruta ${s.num}</td><td>${s.stops.length}</td><td>${s.parcels}</td><td>${s.km.toFixed(1)}</td><td>${durTxt(s.durMin)}</td><td><b>${hhmm(s.latest)}</b></td><td>${hhmm(s.end)}</td><td>${Math.round(s.slackMin)} min</td><td class="${ok?'st-ok':'st-bad'}">${ok?'A tiempo':'Tarde'}</td><td><select class="emp" data-emp="${i}" style="min-width:170px;padding:5px">${empOptions()}</select></td><td style="display:flex;gap:4px"><button data-print="${i}">Imprimir</button><button data-pdf="${i}">PDF</button><button data-wa="${i}" style="background:#25D366;border-color:#25D366;color:#fff">WhatsApp</button><button data-copy="${i}">Copiar</button></td></tr>`;});
+    h+=`<tr data-i="${i}"><td><span class="dot" style="background:${s.color}"></span>Ruta ${s.num}${s.chica?' <span title="Moto chica: sin autopistas ni cerros" style="font-size:11px;background:var(--info-bg);color:var(--info);padding:1px 5px;border-radius:6px">🛵 chica</span>':''}</td><td>${s.stops.length}</td><td>${s.parcels}</td><td>${s.km.toFixed(1)}</td><td>${durTxt(s.durMin)}</td><td><b>${hhmm(s.latest)}</b></td><td>${hhmm(s.end)}</td><td>${Math.round(s.slackMin)} min</td><td class="${ok?'st-ok':'st-bad'}">${ok?'A tiempo':'Tarde'}</td><td><select class="emp" data-emp="${i}" style="min-width:170px;padding:5px">${empOptions()}</select></td><td style="display:flex;gap:4px"><button data-print="${i}">Imprimir</button><button data-pdf="${i}">PDF</button><button data-wa="${i}" style="background:#25D366;border-color:#25D366;color:#fff">WhatsApp</button><button data-copy="${i}">Copiar</button></td></tr>`;});
   h+=`</tbody></table></div>`;
   sched.forEach((s,i)=>{
-    h+=`<details class="route" id="det${i}"><summary><span class="dot" style="background:${s.color}"></span>Ruta ${s.num} · ${s.stops.length} paradas · ${durTxt(s.durMin)} · salir a más tardar ${hhmm(s.latest)}</summary><ol>`;
+    h+=`<details class="route" id="det${i}"><summary><span class="dot" style="background:${s.color}"></span>Ruta ${s.num}${s.chica?' · 🛵 moto chica':''} · ${s.stops.length} paradas · ${durTxt(s.durMin)} · salir a más tardar ${hhmm(s.latest)}</summary><ol>`;
     s.stops.forEach(o=>{h+=`<li><b>${hhmm(o.eta)}</b> · ${esc(o.st.parcels.map(p=>p.id).join(', '))}<br><span>${esc(o.st.dir||(o.st.lat.toFixed(5)+', '+o.st.lng.toFixed(5)))} · espera ${Math.round(o.svcMin)} min</span></li>`;});
     h+=`</ol></details>`;
   });
@@ -843,6 +896,7 @@ function drawTicket(doc,R,cfg,draw){
   const d=cfg.start.toLocaleDateString('es-MX',{weekday:'short',day:'2-digit',month:'short',year:'numeric'});
   P(`Repartidor: ${R.repartidor||'____________________'}`,'bold',10.5,0.5);
   P(`Prioridad de despacho: ${R.num} de ${R.total}`,'bold',10);
+  if(R.chica)P('MOTO CHICA: sin autopistas ni carriles centrales','bold',9.5);
   P(`Fecha: ${d}`,'bold',9);P(`Salida: ${hhmm(R.start)} de Lassaga 54 · salir a más tardar ${hhmm(R.latest)}`,'bold',9);
   P(`Paradas: ${R.stops.length}  Envíos: ${R.parcels}  ${R.km.toFixed(1)} km`,'bold',9);
   const same=R.stops.filter(o=>o.st.parcels.some(p=>p.tipo==='same_day')).length;if(same)P(`Mismo día: ${same} parada(s)`,'bold',9);
@@ -879,7 +933,7 @@ function ticketHTML(R,cfg){
   const k=cfg.fs,px=v=>(v*k).toFixed(1)+'pt';
   const d=cfg.start.toLocaleDateString('es-MX',{weekday:'short',day:'2-digit',month:'short',year:'numeric'});
   const same=R.stops.filter(o=>o.st.parcels.some(p=>p.tipo==='same_day')).length;
-  let h=`<section class="t"><div class="c b" style="font-size:${px(16)}">PACKATELAS</div><div class="c b" style="font-size:${px(14)}">RUTA ${R.num} de ${R.total}</div><div class="c b" style="font-size:${px(9)}">PRIORIDAD DE DESPACHO ${R.num}</div>
+  let h=`<section class="t"><div class="c b" style="font-size:${px(16)}">PACKATELAS</div><div class="c b" style="font-size:${px(14)}">RUTA ${R.num} de ${R.total}</div><div class="c b" style="font-size:${px(9)}">PRIORIDAD DE DESPACHO ${R.num}</div>${R.chica?`<div class="c b" style="font-size:${px(9)};border:1.5px solid #000;margin-top:2px">MOTO CHICA · SIN AUTOPISTAS NI CARRILES CENTRALES</div>`:''}
   <div class="b" style="font-size:${px(11)};margin-top:4px">Repartidor: ${esc(R.repartidor||'____________________')}</div>
   <div class="b">Fecha: ${esc(d)}<br>Salida: ${hhmm(R.start)} de Lassaga 54<br>Salir a más tardar: ${hhmm(R.latest)} · duración ${durTxt(R.durMin)}<br>Paradas: ${R.stops.length} · Envíos: ${R.parcels} · ${R.km.toFixed(1)} km${same?`<br>Mismo día: ${same} parada(s)`:''}</div>
   <div class="b" style="font-size:${px(12)};margin-top:3px">Termina aprox: ${hhmm(R.end)} <span style="font-size:${px(9)}">(límite ${hhmm(R.deadline)})</span></div><hr class="thick">`;
@@ -914,7 +968,7 @@ function printTickets(idxs){
 }
 function routeText(R){
   const e=empleadoDe(R.num);
-  let t=`*PACKATELAS · Ruta ${R.num} de ${R.total}*${e?' · '+e.nombre:''}\n${R.start.toLocaleDateString('es-MX',{weekday:'long',day:'2-digit',month:'short'})}\nPrioridad de despacho ${R.num} de ${R.total} · salir a más tardar ${hhmm(R.latest)}\nSalida ${hhmm(R.start)} desde Lassaga 54 · termina aprox ${hhmm(R.end)}\n${R.stops.length} paradas · ${R.parcels} envíos · ${R.km.toFixed(1)} km\n`;
+  let t=`*PACKATELAS · Ruta ${R.num} de ${R.total}*${e?' · '+e.nombre:''}\n${R.start.toLocaleDateString('es-MX',{weekday:'long',day:'2-digit',month:'short'})}\nPrioridad de despacho ${R.num} de ${R.total} · salir a más tardar ${hhmm(R.latest)}${R.chica?'\n🛵 Moto chica: sin autopistas ni carriles centrales':''}\nSalida ${hhmm(R.start)} desde Lassaga 54 · termina aprox ${hhmm(R.end)}\n${R.stops.length} paradas · ${R.parcels} envíos · ${R.km.toFixed(1)} km\n`;
   R.stops.forEach((o,i)=>{
     const s=stopInfo(o,i,R);
     t+=`\n*${s.n}. ~${s.eta}*${s.same?' · MISMO DÍA':''} · ${s.ids.join(', ')}\n${s.nombres?s.nombres+'\n':''}${s.calle}\n${s.zona?s.zona+'\n':''}${s.comp?'Compromiso: '+s.comp+'\n':''}${mapsURL(o.st)}\n`;

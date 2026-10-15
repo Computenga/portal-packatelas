@@ -622,4 +622,89 @@ t('base única: Personal manda y Empleados del checador se llena solo', () => {
   assert(!E()(n));
 });
 
+
+t('operación: GPS de Shipday en prueba, recolecciones con aprobación y alcance de motos chicas', () => {
+  const { ctx } = env;
+  const calls = [];
+  const resp = (code, obj) => ({ getResponseCode: () => code, getContentText: () => JSON.stringify(obj) });
+  const hoyISO = '2026-10-12T15:00:00Z', ayerISO = '2026-10-11T15:00:00Z';
+  let ORD = [
+    { orderId: 101, orderNumber: 'RECOLECCION-1', restaurant: { name: 'Casfa', address: 'Calle A 1', latitude: 19.43, longitude: -99.14 }, assignedCarrierId: -1, activityLog: { placementTime: hoyISO } },
+    { orderId: 102, orderNumber: '7788', restaurant: { name: 'Photurax Recolección', address: 'Calle B 2' }, assignedCarrierId: -1, activityLog: { placementTime: hoyISO } },
+    { orderId: 103, orderNumber: 'ML-555', restaurant: { name: 'Tienda' }, assignedCarrierId: -1, activityLog: { placementTime: hoyISO } },
+    { orderId: 104, orderNumber: 'RECOLECCION-4', restaurant: { name: 'Otro' }, assignedCarrierId: 11, activityLog: { placementTime: hoyISO } },
+    { orderId: 105, orderNumber: 'RECOLECCION-5', restaurant: { name: 'Viejo' }, assignedCarrierId: -1, activityLog: { placementTime: ayerISO } },
+  ];
+  const fetchOne = (url, o = {}) => {
+    calls.push((o.method || 'get') + ' ' + url);
+    if (/fcm\.googleapis/.test(url)) { env.pushes.push(JSON.parse(o.payload).message); return resp(200, {}); }
+    if (/shipday\.com\/carriers/.test(url)) return resp(200, [{ id: 11, name: 'Saidd', isOnShift: true, isActive: true, carrrierLocationLat: 19.44, carrrierLocationLng: -99.13 },
+      { id: 44, name: 'Casandra', isOnShift: false, isActive: true, carrrierLocationLat: null, carrrierLocationLng: null }]);
+    if (/shipday\.com\/orders\/assign\//.test(url)) return resp(204, {});
+    if (/shipday\.com\/orders$/.test(url)) return resp(200, ORD);
+    if (/tomtom/.test(url)) { const lejos = /19\.600000/.test(url); const avoid = /avoid=motorways/.test(url);
+      return resp(200, { routes: [{ summary: { travelTimeInSeconds: (lejos ? (avoid ? 3600 : 1500) : (avoid ? 900 : 800)) }, sections: [] }] }); }
+    return resp(404, {});
+  };
+  ctx.UrlFetchApp = { fetch: fetchOne, fetchAll: reqs => reqs.map(r => fetchOne(r.url, r)) };
+  ctx.Maps = { newGeocoder: () => { const g = { setRegion: () => g, setLanguage: () => g, geocode: () => ({ results: [{ geometry: { location: { lat: 19.5, lng: -99.2 } } }] }) }; return g; } };
+  ok(call('vincularShipday', { shipday_id: '11', no_empleado: '4' }, admin));
+  ok(call('vincularShipday', { shipday_id: '44', no_empleado: '5' }, admin));
+  ok(call('guardarPersona', { persona: { no_empleado: '5', puesto: 'Repartidora' } }, admin));
+
+  // GPS: una muestra real y un análisis con paradas
+  assert.strictEqual(ok(call('gpsAhora', {}, admin)).muestras, 1);
+  const gl = maestro.getSheetByName('GpsLog');
+  const T0 = new Date('2026-10-12T10:00:00-06:00').getTime();
+  [[0, 19.4300, -99.1500], [5, 19.43001, -99.15002], [10, 19.43003, -99.14999], [20, 19.43002, -99.15001], [25, 19.45, -99.16], [30, 19.47, -99.17], [35, 19.47, -99.17], [40, 19.47, -99.17], [55, 19.47, -99.17]]
+    .forEach(([m, la, lo]) => gl.appendRow([new Date(T0 + m * 60000), '77', '', 'Prueba', la, lo, 'SI']));
+  const gp = ok(call('gpsPrueba', { fecha: '2026-10-12' }, admin));
+  const pr = gp.repartidores.find(x => x.carrier_id === '77');
+  assert.strictEqual(pr.paradas.length, 2);
+  assert.deepStrictEqual(pr.paradas.map(x => [x.desde, x.min, x.tipo]), [['10:00', 20, 'detenido'], ['10:30', 25, 'sin_senal']]);
+  assert.strictEqual(pr.max_congelado_min, 25);
+  fail(call('gpsPrueba', {}, tok4), /Sin permiso/);
+
+  // Recolecciones: solo las de hoy, sin asignar y con el texto
+  const r1 = ok(call('recoleccionesBuscar', {}, admin));
+  assert.strictEqual(r1.nuevas, 2); assert.strictEqual(r1.propuestas, 2); assert.strictEqual(r1.disponibles, 2);
+  let v = ok(call('recolecciones', {}, admin));
+  assert.strictEqual(v.recolecciones.length, 2);
+  const ph = v.recolecciones.find(x => x.cliente === 'Photurax Recolección');
+  assert.deepStrictEqual([ph.lat, ph.lng], [19.5, -99.2], 'geocodifica si Shipday no trae coordenadas');
+  assert(v.clientes.some(c => c.cliente === 'Casfa' && c.volumen === ''));
+  assert(env.pushes.length || ok(call('bandeja', {}, admin)).some(n => /por aprobar/.test(n.titulo)));
+  // clasificar volumen actualiza la propuesta
+  ok(call('clienteVolumen', { cliente: 'Casfa', volumen: 'alto' }, admin));
+  v = ok(call('recolecciones', {}, admin));
+  assert.strictEqual(v.recolecciones.find(x => x.cliente === 'Casfa').puntos, 3);
+  // no se repite
+  assert.strictEqual(ok(call('recoleccionesBuscar', {}, admin)).nuevas, 0);
+  // cambiar a mano y aprobar todas → PUT en Shipday
+  const casfa = v.recolecciones.find(x => x.cliente === 'Casfa');
+  ok(call('recoleccionCambiar', { rec_id: casfa.rec_id, no_empleado: '5' }, admin));
+  const ap = ok(call('recoleccionAprobar', { todas: true }, admin));
+  assert.strictEqual(ap.asignadas, 2);
+  assert(calls.some(c => c === 'put https://api.shipday.com/orders/assign/101/44'), calls.filter(c => /assign/.test(c)).join(' | '));
+  v = ok(call('recolecciones', {}, admin));
+  assert(v.recolecciones.every(x => x.estado === 'asignada'));
+  assert.strictEqual(v.disponibles.find(d => d.no_empleado === '5').puntos, 3);
+  // capacidad: nadie puede con otro volumen alto si el tope es 3
+  maestro.getSheetByName('ConfigPortal').data.find(r => r[0] === 'RECOLECCION_CAPACIDAD')[1] = '3';
+  ORD = ORD.concat([{ orderId: 106, orderNumber: 'RECOLECCION-6', restaurant: { name: 'Casfa', address: 'Calle A 1', latitude: 19.43, longitude: -99.14 }, assignedCarrierId: -1, activityLog: { placementTime: hoyISO } }]);
+  ORD[0].assignedCarrierId = 44; ORD[1].assignedCarrierId = 11;
+  const r3 = ok(call('recoleccionesBuscar', {}, admin));
+  assert.strictEqual(r3.nuevas, 1); assert.strictEqual(r3.problemas, 1);
+  assert.strictEqual(ok(call('recolecciones', {}, admin)).recolecciones.find(x => x.order_number === 'RECOLECCION-6').estado, 'sin_capacidad');
+  maestro.getSheetByName('ConfigPortal').data.find(r => r[0] === 'RECOLECCION_CAPACIDAD')[1] = '6';
+
+  // Motos chicas: punto cercano OK, punto lejano solo por autopista → no apto; segunda vez sale de la caché
+  const al = ok(call('alcanceMotoChica', { puntos: [[19.43, -99.14], [19.6, -99.05]] }, admin));
+  assert.deepStrictEqual(al.puntos.map(x => x.ok), [true, false]);
+  assert.strictEqual(al.puntos[1].motivo, 'rodeo_sin_autopista');
+  assert.strictEqual(ok(call('alcanceMotoChica', { puntos: [[19.43, -99.14], [19.6, -99.05]] }, admin)).consultas, 0);
+  // proxy TomTom evita autopistas en rutas de moto chica
+  ok(call('guardarClaves', { tomtom: '-' }, admin));
+});
+
 console.log(`\n${passed} pruebas OK`);

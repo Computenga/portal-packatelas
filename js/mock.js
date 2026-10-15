@@ -329,6 +329,17 @@ export function handle(action, d, token) {
     case 'shipdayRepartidores': ADMIN(); return { repartidores: [{ id: '561122', nombre: 'Angel Campos', telefono: '+52 55 1234 5678', activo: true, no_empleado: '', sugerido: '' }, { id: '470064', nombre: 'Fernando Gallegos', telefono: '', activo: true, no_empleado: '', sugerido: '' }, { id: '300001', nombre: 'Saidd Lopez', telefono: '+52 55 1111 2222', activo: true, no_empleado: '4', sugerido: '' }, { id: '300002', nombre: 'Jonatan O.', telefono: '', activo: true, no_empleado: '', sugerido: '92' }],
       empleados: personal.map(p => ({ no_empleado: p.no_empleado, nombre: p.nombre, repartidor: esRep(p), shipday_id: '' })) };
     case 'vincularShipday': ADMIN(); return true;
+    case 'recolecciones': OPS(); return { fecha: hoy, modo: 'aprobacion', hasta: '12:00', capacidad: 6, shipday: true,
+      disponibles: [{ no_empleado: '4', nombre: 'Saidd Argenis López', entrada: '08:58', puntos: 4 }, { no_empleado: '92', nombre: 'Jonatan Ortega', entrada: '09:40', puntos: 1 }],
+      recolecciones: [{ rec_id: 'REC-1', order_number: 'RECOLECCION-1', cliente: 'Casfa', direccion: 'Calz. de Tlalpan 1234, Portales', lat: 19.37, lng: -99.14, volumen: 'alto', puntos: 3, no_empleado: '4', nombre: 'Saidd Argenis López', estado: 'propuesta', creada: '09:12', nota: '' },
+        { rec_id: 'REC-2', order_number: '7788', cliente: 'Photurax', direccion: 'Av. Insurgentes Sur 800, Del Valle', lat: 19.38, lng: -99.17, volumen: 'bajo', puntos: 1, no_empleado: '92', nombre: 'Jonatan Ortega', estado: 'asignada', creada: '09:20', nota: '' },
+        { rec_id: 'REC-3', order_number: 'RECOLECCION-3', cliente: 'Nuevo Cliente SA', direccion: 'Calle 5 de Mayo 20, Centro', lat: 19.43, lng: -99.13, volumen: 'sin clasificar', puntos: 2, no_empleado: '4', nombre: 'Saidd Argenis López', estado: 'propuesta', creada: '10:02', nota: '' }],
+      clientes: [{ cliente: 'Nuevo Cliente SA', volumen: '' }, { cliente: 'Casfa', volumen: 'alto' }, { cliente: 'Photurax', volumen: 'bajo' }] };
+    case 'recoleccionesBuscar': OPS(); return { nuevas: 0 };
+    case 'recoleccionAprobar': OPS(); return { asignadas: 2, errores: [] };
+    case 'recoleccionCambiar': case 'recoleccionRechazar': case 'clienteVolumen': OPS(); return true;
+    case 'gpsPrueba': ADMIN(); return { fecha: d.fecha, activo: true, repartidores: [{ carrier_id: '300001', nombre: 'Saidd Lopez', empleado: 'Saidd Argenis López', muestras: 96, con_gps: 94, en_turno: 90, cambios: 71, pct_cambio: 76, max_congelado_min: 20, primera: '09:00', ultima: '17:00', paradas: [{ desde: '12:10', hasta: '12:35', min: 25, lat: 19.36, lng: -99.08, tipo: 'detenido' }, { desde: '14:00', hasta: '14:50', min: 50, lat: 19.40, lng: -99.10, tipo: 'sin_senal' }] }] };
+    case 'gpsAhora': ADMIN(); return { muestras: 7 };
     case 'seguimientoAhora': OPS(); return { rutas: 2, consultados: 8, avisos: 1 };
     case 'seguimientoRuta': OPS(); return { ruta_id: d.ruta_id, nombre: 'Jonatan Ortega', num: 2, seguimiento: { total: 7, entregados: 1, fallidos: 0, pendientes: 6, limite: '13:30', fin_estimado: '14:15', estado: 'tarde', retraso_min: 45, actualizado: '12:10' },
       paradas: RUTA_DEMO.paradas.map((p, i) => ({ orden: i + 1, eta: p.eta, dir: p.dir, ref: p.ref, envios: p.envios.map(n => ({ envio: n, estado: i === 0 ? 'entregado' : 'pendiente', hora: i === 0 ? '10:31' : '' })) })) };

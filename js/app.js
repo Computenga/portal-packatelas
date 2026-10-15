@@ -707,6 +707,7 @@ VIEWS.mas = async function mas() {
     menu([
       ['👋', 'Mi bienvenida', 'Pasos para empezar a trabajar', bienvenidaView],
       isAdmin() && !isPatron() && ['🧭', 'Rutas y reporte', 'Ruteador, rutas publicadas y reporte de Shipday', () => rutasAdminView()],
+      isAdmin() && !isPatron() && ['📦', 'Recolecciones', 'Asignación de recolecciones del día', () => recoleccionesView()],
       esRepartidor() && ['🗺️', 'Mi ruta', 'Paradas en orden y mapa', () => rutaView()],
       esRepartidor() && ['📱', 'Apps y accesos', 'Instala y abre tus apps de trabajo', () => appsView('instalar')],
       ['👤', 'Mis datos', 'RFC, CLABE, horario, antigüedad', perfilView],
@@ -1294,7 +1295,9 @@ VIEWS.pmas = function pmas() {
       h('div', {}, h('h3', {}, '👤 Ver mi portal de empleado'), h('p', { class: 'muted small' }, 'Tu asistencia, tus recibos y depósitos')), h('span', { class: 'chev' }, '›')),
     menu([
       ['🗺️', 'Rutas y reporte', 'Ruteador, rutas publicadas y reporte de Shipday', () => rutasAdminView()],
+      ['📦', 'Recolecciones', 'Asignación automática de recolecciones del día', () => recoleccionesView()],
       ['🔗', 'Repartidores en Shipday', 'Vincula cada repartidor de Shipday con su empleado', () => shipdayVincularView()],
+      ['🛰️', 'GPS de Shipday (prueba)', 'Qué tan seguido se actualiza la ubicación y paradas detectadas', () => gpsPruebaView()],
       ['📝', 'Solicitudes', 'Justificantes, vacaciones, permisos, anticipos', () => solicitudesAdmin()],
       ['📢', 'Avisos', 'Comunicados por notificación', enviarAvisoView],
       ['💳', 'Adeudos y cargos', 'Préstamos y cargos de flotilla', () => adeudosAdmin()],
@@ -1497,6 +1500,77 @@ async function shipdayVincularView() {
       h('select', { class: 'input', style: 'margin-top:8px', onchange: e => guardar(c, e.target.value) }, opts(c.no_empleado)),
       c.sugerido && h('div', { class: 'row between small', style: 'margin-top:6px' },
         h('span', { class: 'muted' }, 'Sugerido: ' + nombre(c.sugerido)), h('button', { class: 'btn sm primary', onclick: () => guardar(c, c.sugerido) }, 'Vincular')))));
+}
+
+const REC_EST = { propuesta: ['Por aprobar', 'warn'], asignada: ['Asignada', 'ok'], sin_capacidad: ['Sin capacidad', 'err'], sin_repartidor: ['Sin repartidor', 'err'], error: ['Error', 'err'], descartada: ['Descartada', 'muted'] };
+const VOL = { bajo: ['Bajo', 'ok'], medio: ['Medio', 'warn'], alto: ['Alto', 'err'] };
+async function recoleccionesView() {
+  state.tab = modoPatron() ? 'pmas' : 'mas';
+  const back = () => go(modoPatron() ? 'pmas' : 'mas');
+  const body = h('div', {}, loading());
+  screen('Recolecciones', body, { back, actions: h('button', { class: 'icon-btn', 'aria-label': 'Actualizar', onclick: () => recoleccionesView() }, '↻') });
+  let d;
+  try { d = await api('recolecciones'); } catch (e) { return fill(body, errorBox(e, recoleccionesView)); }
+  const accion = async (label, fn, ok) => { try { const r = await busy(label, fn); toast(ok(r), 'ok', 5000); recoleccionesView(); } catch (e) { toast(e.message, 'error', 6000); } };
+  const pend = d.recolecciones.filter(r => r.estado === 'propuesta');
+  const prob = d.recolecciones.filter(r => ['sin_capacidad', 'sin_repartidor', 'error'].includes(r.estado));
+  const sinVol = d.clientes.filter(c => !c.volumen);
+  const optsRep = sel => [h('option', { value: '' }, '— Sin repartidor —')].concat(d.disponibles.map(x => h('option', { value: x.no_empleado, selected: x.no_empleado === sel }, `${x.nombre} (${x.puntos}/${d.capacidad})`)));
+  const tarjeta = r => { const [l, c] = REC_EST[r.estado] || [r.estado, 'muted']; const [vl, vc] = VOL[r.volumen] || ['Sin clasificar', 'muted'];
+    return h('div', { class: 'card' },
+      h('div', { class: 'row between' }, h('strong', {}, r.cliente), h('span', { class: 'badge b-' + c }, l)),
+      h('div', { class: 'muted small' }, (r.order_number ? r.order_number + ' · ' : '') + (r.direccion || 'Sin dirección')),
+      h('div', { class: 'row gap8 small', style: 'margin:6px 0' }, h('span', { class: 'badge b-' + vc }, `Volumen ${vl} · ${r.puntos} pt`), r.creada && h('span', { class: 'muted' }, 'creada ' + r.creada),
+        r.lat != null && h('a', { href: `https://www.google.com/maps/search/?api=1&query=${r.lat},${r.lng}`, target: '_blank', rel: 'noopener' }, 'mapa')),
+      r.nota && h('div', { class: 'muted tiny' }, r.nota),
+      r.estado === 'asignada' ? h('div', { class: 'small' }, '✅ ' + r.nombre)
+        : r.estado !== 'descartada' && [
+          h('select', { class: 'input', onchange: e => accion('Cambiando…', () => api('recoleccionCambiar', { rec_id: r.rec_id, no_empleado: e.target.value }), () => 'Repartidor cambiado') }, optsRep(r.no_empleado)),
+          h('div', { class: 'row gap8', style: 'margin-top:6px' },
+            r.no_empleado && h('button', { class: 'btn sm primary', onclick: () => accion('Asignando en Shipday…', () => api('recoleccionAprobar', { rec_id: r.rec_id }), x => x.asignadas ? 'Asignada en Shipday' : x.errores.join(' · ')) }, 'Aprobar'),
+            h('button', { class: 'btn sm', onclick: () => accion('Descartando…', () => api('recoleccionRechazar', { rec_id: r.rec_id }), () => 'Descartada') }, 'Descartar'))]); };
+  fill(body,
+    !d.shipday && h('div', { class: 'banner warn' }, 'Falta la key de Shipday (ruteador → Claves del servidor).'),
+    h('div', { class: 'banner info small' }, `Modo: ${d.modo === 'automatico' ? 'automático' : d.modo === 'apagado' ? 'apagado' : 'con aprobación'} · se buscan cada 5 min hasta las ${d.hasta} · tope ${d.capacidad} puntos por repartidor (bajo 1 · medio 2 · alto 3).`),
+    h('div', { class: 'row gap8' },
+      h('button', { class: 'btn grow', onclick: () => accion('Buscando en Shipday…', () => api('recoleccionesBuscar'), r => r.nuevas ? `${r.nuevas} nueva(s)` : 'No hay recolecciones nuevas') }, '🔎 Buscar ahora'),
+      pend.length > 0 && h('button', { class: 'btn primary grow', onclick: () => accion('Asignando en Shipday…', () => api('recoleccionAprobar', { todas: true }), r => `${r.asignadas} asignada(s)` + (r.errores.length ? ' · ' + r.errores.length + ' con error' : '')) }, `✅ Aprobar todas (${pend.length})`)),
+    section(`Repartidores disponibles (${d.disponibles.length})`),
+    d.disponibles.length ? h('div', { class: 'chips wrap' }, d.disponibles.map(x => h('span', { class: 'chip' }, `${primerNombre(x.nombre)} · llegó ${x.entrada} · ${x.puntos}/${d.capacidad} pt`)))
+      : h('p', { class: 'muted small' }, 'Nadie ha checado entrada (o no tienen su cuenta de Shipday vinculada).'),
+    sinVol.length > 0 && [section(`Clientes sin volumen (${sinVol.length})`), h('p', { class: 'muted small' }, 'Mientras no se clasifiquen cuentan como volumen medio.'),
+      sinVol.map(c => h('div', { class: 'card row between' }, h('strong', {}, c.cliente),
+        h('div', { class: 'row gap8' }, ['bajo', 'medio', 'alto'].map(v => h('button', { class: 'btn sm', onclick: () => accion('Guardando…', () => api('clienteVolumen', { cliente: c.cliente, volumen: v }), () => c.cliente + ': ' + v) }, VOL[v][0])))))],
+    prob.length > 0 && [section(`Requieren atención (${prob.length})`), prob.map(tarjeta)],
+    section(`Por aprobar (${pend.length})`), pend.length ? pend.map(tarjeta) : h('p', { class: 'muted small' }, 'Nada pendiente.'),
+    section('Asignadas y descartadas'), d.recolecciones.filter(r => ['asignada', 'descartada'].includes(r.estado)).map(tarjeta),
+    d.clientes.some(c => c.volumen) && h('details', { class: 'card' }, h('summary', {}, 'Volumen de todos los clientes'),
+      d.clientes.filter(c => c.volumen).map(c => h('div', { class: 'row between small', style: 'margin-top:6px' }, h('span', {}, c.cliente),
+        h('select', { class: 'input', style: 'width:auto', onchange: e => accion('Guardando…', () => api('clienteVolumen', { cliente: c.cliente, volumen: e.target.value }), () => 'Guardado') },
+          ['bajo', 'medio', 'alto'].map(v => h('option', { value: v, selected: v === c.volumen }, VOL[v][0])))))));
+}
+
+async function gpsPruebaView(f) {
+  state.tab = 'pmas';
+  f = f || isoHoy();
+  const body = h('div', {}, loading());
+  screen('GPS de Shipday', body, { back: () => go('pmas'), sub: 'Prueba' });
+  let d;
+  try { d = await api('gpsPrueba', { fecha: f }); } catch (e) { return fill(body, errorBox(e)); }
+  const TIPO = { detenido: ['Detenido', 'warn'], sin_senal: ['Sin señal (coordenada congelada)', 'err'], base: ['En la base', 'muted'] };
+  fill(body,
+    h('div', { class: 'row gap8' }, h('input', { type: 'date', value: f, class: 'grow', onchange: e => gpsPruebaView(e.target.value) }),
+      h('button', { class: 'btn', onclick: async () => { try { const r = await api('gpsAhora'); toast(`${r.muestras} ubicación(es) guardadas`, 'ok'); gpsPruebaView(f); } catch (e) { toast(e.message, 'error'); } } }, 'Tomar muestra')),
+    h('div', { class: 'banner info small' }, (d.activo ? 'Prueba activa: ' : 'Prueba apagada (GPS_PRUEBA en ConfigPortal). ') + 'cada 5 min se guarda la última ubicación que Shipday tiene de cada repartidor. Sin alertas todavía. "% con cambio" alto = Shipday actualiza seguido; coordenadas que no cambian nada = app cerrada o sin señal.'),
+    !d.repartidores.length ? empty('🛰️', 'Aún no hay muestras para este día.') : d.repartidores.map(x => h('div', { class: 'card' },
+      h('div', { class: 'row between' }, h('strong', {}, x.empleado || x.nombre), h('span', { class: 'muted tiny' }, 'ID ' + x.carrier_id + (x.empleado ? '' : ' · sin vincular'))),
+      h('div', { class: 'kpis', style: 'margin-top:6px' },
+        kpi('Muestras', x.muestras, `${x.primera}–${x.ultima}`), kpi('Con GPS', x.con_gps, `${x.en_turno} en turno`, x.con_gps ? '' : 'err'),
+        kpi('% con cambio', x.pct_cambio + '%', 'entre muestras', x.pct_cambio >= 50 ? 'ok' : 'warn'), kpi('Máx. congelado', x.max_congelado_min + ' min', 'misma coordenada exacta', x.max_congelado_min >= 30 ? 'err' : '')),
+      x.paradas.length ? x.paradas.map(p => { const [l, c] = TIPO[p.tipo]; return h('div', { class: 'row between small', style: 'margin-top:6px' },
+        h('span', {}, `${p.desde}–${p.hasta} · ${p.min} min`), h('span', { class: 'row gap8' }, h('span', { class: 'badge b-' + c }, l),
+          h('a', { href: `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`, target: '_blank', rel: 'noopener' }, 'mapa'))); })
+        : h('p', { class: 'muted small' }, 'Sin paradas de 15+ min.'))));
 }
 
 async function rutaSegView(r, f) {
