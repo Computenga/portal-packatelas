@@ -496,8 +496,8 @@ async function bienvenidaView() {
       h('p', { class: 'muted tiny' }, 'Con la cámara de tu celular o un PDF. RH los revisa aquí mismo.')];
     if (x.id === 'apps') return [x.faltan && x.faltan.length ? h('p', { class: 'small' }, 'Te faltan: ', x.faltan.join(', ')) : null,
       h('button', { class: 'btn primary', onclick: () => appsView('instalar', () => bienvenidaView()) }, 'Ver apps')];
-    if (x.id === 'checador') return [h('ol', { class: 'small steps-ol' }, h('li', {}, 'En la base, pide a RH que te registre en el kiosco del checador.'),
-      h('li', {}, 'Escanea el QR del kiosco con la cámara de tu celular.'), h('li', {}, 'Toca "Checar con huella" y pon tu dedo.')),
+    if (x.id === 'checador') return [h('ol', { class: 'small steps-ol' }, h('li', {}, 'En la base, pide a RH que registre tu huella en el checador (con tu número de empleado).'),
+      h('li', {}, 'Haz tu primera checada poniendo tu dedo.'), h('li', {}, 'Este paso se marca solo cuando llega tu primera checada.')),
       h('button', { class: 'btn', onclick: () => bienvenidaView() }, 'Ya lo hice, revisar')];
     if (x.id === 'notificaciones') return pushCard() || h('button', { class: 'btn', onclick: () => bienvenidaView() }, 'Revisar');
     return null;
@@ -739,7 +739,7 @@ async function perfilView() {
       h('div', { class: 'card' }, row('RFC', p.rfc), row('CURP', p.curp), row('NSS', p.nss)),
       h('div', { class: 'card' }, row('Cuenta de nómina', p.clabe ? `${p.banco || ''} ${p.clabe}` : ''), row('Teléfono', p.telefono), row('Correo', p.correo)),
       h('div', { class: 'card' }, row('Hora de entrada', p.horario.entrada), row('Días laborales', p.horario.dias), row('Comida', p.horario.comida ? p.horario.comida + ' min' : ''),
-        row('Celular en checador', p.celular_checador ? 'Registrado ✓' : 'No registrado')),
+        row('Huella en checador', p.celular_checador ? 'Registrada ✓' : 'Sin checadas aún')),
       h('p', { class: 'muted small center' }, '¿Algún dato está mal? Avísale a RH para corregirlo.'));
   } catch (e) { fill(body, errorBox(e)); }
 }
@@ -1062,7 +1062,7 @@ VIEWS.personal = async function personal(filtro = 'activos', q = '') {
     h('button', { class: 'chip ' + (filtro === k ? 'on' : ''), onclick: () => VIEWS.personal(k, search.value) }, t))),
     h('button', { class: 'card tap row between', onclick: () => altasAdmin() }, h('div', {}, h('strong', {}, '🆕 Altas de personal nuevo'), h('div', { class: 'muted tiny' }, 'Gente que subió sus documentos y espera su número de empleado')), h('span', { class: 'chev' }, '›')),
     search, list,
-    h('p', { class: 'muted small' }, 'Los empleados nuevos del checador aparecen aquí solos (cada hora). Horario y celular se editan en el kiosco del checador.'));
+    h('p', { class: 'muted small' }, 'Horario y checadas de cada empleado se capturan aquí y pasan solos al checador. En el checador ZKTeco solo registras su huella con el mismo número de empleado.'));
   draw();
 };
 
@@ -1075,7 +1075,7 @@ async function personaView(p) {
   const body = h('div', {},
     !nuevo && h('div', { class: 'card row', style: 'gap:12px' }, h('div', { class: 'avatar' }, iniciales(p.nombre)),
       h('div', { class: 'grow' }, h('h3', {}, p.nombre), h('p', { class: 'muted small' }, p.tiene_pin ? `Último acceso ${p.ultimo_acceso ? fechaHora(p.ultimo_acceso) : '—'}` : 'Aún no entra al portal'),
-        p.horario && h('p', { class: 'muted tiny' }, `Checador: entrada ${p.horario.entrada || '—'} · ${p.horario.dias || 'sin días'} · celular ${p.celular_checador ? '✓' : '✗'}`))),
+        p.horario && h('p', { class: 'muted tiny' }, `Checador: entrada ${p.horario.entrada || '—'} · ${p.horario.dias || 'sin días'} · huella ${p.celular_checador ? '✓' : '✗'}`))),
     !nuevo && h('div', { class: 'quick' },
       h('button', { class: 'q', onclick: () => { state.tab = 'personal'; VIEWS.asistencia(null, p.no_empleado, p.nombre); } }, h('span', {}, '⏱️'), 'Asistencia'),
       h('button', { class: 'q', onclick: () => subirDoc(p) }, h('span', {}, '📤'), 'Subir doc.'),
@@ -1098,7 +1098,7 @@ async function personaView(p) {
     h('p', { class: 'muted tiny' }, 'Con la CLABE se reconocen sus depósitos de Fondeadora automáticamente.'),
     section('Horario y checador'),
     horarioCampos(p, f),
-    h('p', { class: 'muted tiny' }, 'Se copia solo al kiosco del checador. En el kiosco ya solo registras su celular.'),
+    h('p', { class: 'muted tiny' }, 'Se copia sola al checador. En el checador ZKTeco registra su huella con este mismo número de empleado.'),
     h('div', { class: 'grid2' }, inp('flotilla_id', 'ID en la flotilla (ej. U-004)', { autocapitalize: 'characters' }), inp('shipday_id', 'ID(s) de repartidor en Shipday (separados por coma)')),
     section('Acceso'),
     h('div', { class: 'grid2' }, sel('rol', 'Rol', [['empleado', 'Empleado'], ['admin', 'Admin (rutas y reporte)'], ['patron', 'Patrón (super admin)']]), sel('estatus', 'Estatus', [['activo', 'Activo'], ['baja', 'Baja']])),
@@ -1210,7 +1210,7 @@ async function resolverAltaUI(a, aprobar, estatus) {
     puesto = h('input', { class: 'input', placeholder: 'Puesto', value: a.rol === 'repartidor' ? 'Repartidor' : '' });
     const sug = libres.filter(p => p.nombre.toLowerCase().split(' ')[0] === a.nombre.toLowerCase().split(' ')[0]);
     extra = h('div', {},
-      h('p', { class: 'muted small' }, 'Usa el mismo número que tiene (o tendrá) en el checador. Si ya lo diste de alta en el kiosco, elígelo:'),
+      h('p', { class: 'muted small' }, 'Usa el mismo número que tiene (o tendrá) su huella en el checador ZKTeco. Si ya está en la lista de empleados, elígelo:'),
       (sug.length ? sug : libres).slice(0, 8).map(p => h('button', { class: 'chip', style: 'margin:2px', onclick: () => { no.value = p.no_empleado; } }, `${p.no_empleado} · ${primerNombre(p.nombre)}`)),
       h('label', { class: 'label' }, 'Número de empleado'), no, h('label', { class: 'label' }, 'Puesto'), puesto);
   }

@@ -191,7 +191,7 @@ function bienv(p) {
   const pasos = [{ id: 'acceso', titulo: 'Crea tu acceso', detalle: 'RFC y PIN', hecho: !!p.pin, auto: true },
     { id: 'documentos', titulo: 'Sube tus documentos', detalle: `${dd.subidos} de ${dd.requeridos} subidos` + (dd.rechazados ? ` · ${dd.rechazados} por corregir` : ''), hecho: dd.completos, rechazados: dd.rechazados }];
   if (rol === 'repartidor') pasos.push({ id: 'apps', titulo: 'Instala tus apps e inicia sesión', detalle: `${req.filter(a => a.lista).length} de ${req.length} listas`, hecho: req.every(a => a.lista), faltan: req.filter(a => !a.lista).map(a => a.nombre) });
-  pasos.push({ id: 'checador', titulo: 'Registra tu celular en el checador', detalle: 'QR del kiosco + tu huella', hecho: !!o.celular, auto: true });
+  pasos.push({ id: 'checador', titulo: 'Registra tu huella en el checador', detalle: 'Con RH, en el checador de la base', hecho: !!o.celular, auto: true });
   pasos.push({ id: 'notificaciones', titulo: 'Activa las notificaciones', detalle: 'Para tu recibo y tu depósito', hecho: dispositivos.has(p.no_empleado), auto: true });
   const hechos = pasos.filter(x => x.hecho).length;
   return { rol, pasos, hechos, total: pasos.length, completa: hechos === pasos.length, siguiente: (pasos.find(x => !x.hecho) || {}).titulo || '' };

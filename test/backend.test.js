@@ -295,9 +295,12 @@ t('bienvenida: pasos automáticos, docs, apps de repartidor y accesos', () => {
   assert(b.pasos[2].hecho);
   b = ok(call('marcarApp', { app_id: 'zello', lista: false }, tok4));
   assert(!b.pasos[2].hecho && b.pasos[2].faltan[0] === 'Zello');
-  // checador: registrar celular en Empleados
+  // checador: el paso se marca solo con su primera checada del ZKTeco (no con el celular del kiosco viejo)
   empleados.data.find(r => r[0] === '4')[3] = 'cred-xyz';
   ok(call('marcarApp', { app_id: 'zello' }, tok4));
+  b = ok(call('bienvenida', {}, tok4));
+  assert(!b.pasos[3].hecho, 'un celular del kiosco ya no cuenta');
+  checadas.data.push(['ZK-1', D('2026-10-15'), '09:00:00', '4', '', 'ENTRADA', '', 'ZKTeco A3B7214760517', '', '', 'Huella (checador ZKTeco)', '']);
   b = ok(call('bienvenida', {}, tok4));
   assert(b.completa, JSON.stringify(b.pasos.map(x => x.hecho)));
   const i = ok(call('inicio', {}, tok4));

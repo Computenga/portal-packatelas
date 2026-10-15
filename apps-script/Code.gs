@@ -614,9 +614,23 @@ function empleadosChecador_() {
     no: String(r[iNo]).trim(), nombre: String(r[iNom]).trim().replace(/\s+/g, ' '),
     entrada: iHora >= 0 ? String(r[iHora]).trim() : '', diasTxt: iDias >= 0 ? String(r[iDias]).trim() : '',
     dias: parseDias_(iDias >= 0 ? r[iDias] : ''), comida: iCom >= 0 && String(r[iCom]).trim() !== '' ? Number(r[iCom]) : 60,
-    ingreso: iIng >= 0 ? parseFecha_(r[iIng]) : '', celular: iCel >= 0 ? !!String(r[iCel]).trim() : false,
+    // "celular" = ya está registrado en el checador ZKTeco (tiene al menos una checada con su huella)
+    ingreso: iIng >= 0 ? parseFecha_(r[iIng]) : '', celular: conHuellaZk_().has(String(r[iNo]).trim()),
     checadas: iChk >= 0 ? String(r[iChk]) : '',
   })));
+}
+
+/** Números de empleado con al menos una checada del checador de huella ZKTeco. */
+function conHuellaZk_() {
+  if (_cache.zk) return _cache.zk;
+  const out = new Set();
+  const sh = ss_().getSheetByName('Checadas');
+  if (sh && sh.getLastRow() > 1) {
+    const v = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getDisplayValues();
+    const h = v[0].map(x => String(x).trim()), iN = h.indexOf('No. empleado'), iM = h.indexOf('Método');
+    if (iN >= 0 && iM >= 0) v.slice(1).forEach(r => { if (/zkteco/i.test(r[iM])) out.add(String(r[iN]).trim()); });
+  }
+  return (_cache.zk = out);
 }
 
 function parseDias_(txt) {
@@ -1476,7 +1490,7 @@ function bienvenida_(no) {
   if (rol === 'repartidor') pasos.push({ id: 'apps', titulo: 'Instala tus apps e inicia sesión', detalle: apps.filter(a => a.lista).length + ' de ' + apps.length + ' listas',
     hecho: apps.length > 0 && apps.every(a => a.lista), listas: apps.filter(a => a.lista).length, total: apps.length,
     faltan: apps.filter(a => !a.lista).map(a => a.nombre) });
-  pasos.push({ id: 'checador', titulo: 'Registra tu celular en el checador', detalle: 'QR del kiosco + tu huella', hecho: !!e.celular, auto: true });
+  pasos.push({ id: 'checador', titulo: 'Registra tu huella en el checador', detalle: 'Con RH, en el checador de la base', hecho: !!e.celular, auto: true });
   pasos.push({ id: 'notificaciones', titulo: 'Activa las notificaciones', detalle: 'Para tu recibo y tu depósito', hecho: push, auto: true });
   const hechos = pasos.filter(x => x.hecho).length;
   const sig = pasos.find(x => !x.hecho);

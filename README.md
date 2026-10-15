@@ -17,7 +17,7 @@ App web instalable (PWA) para empleados y patrón: asistencia del checador, reci
 | Pagos | Correos "Transferencia exitosa" de Fondeadora en Gmail, revisados cada 5 min |
 | Push | Firebase, el mismo proyecto `flotilla-packatelas` |
 
-**Base única de empleados:** todo se captura en el expediente del portal (pestaña *Personal*): datos, nómina, horario, días, minutos de comida y checadas. La pestaña *Empleados* del checador se llena sola: al guardar en el portal se copia al momento (y si el número es nuevo, se crea su renglón para que en el kiosco solo registres su celular). Cada 15 min se concilian: quien se dé de alta en el kiosco entra a Personal, y si alguien cambia nombre u horario en el kiosco gana el cambio más reciente. Si borras a alguien en el kiosco no se vuelve a crear y su historial de nómina se conserva en Personal.
+**Base única de empleados:** todo se captura en el expediente del portal (pestaña *Personal*): datos, nómina, horario, días, minutos de comida y checadas. La pestaña *Empleados* del checador se llena sola: al guardar en el portal se copia al momento. Las checadas llegan del **checador de huella ZKTeco** (ADMS → Cloudflare Worker → Apps Script del checador → pestaña *Checadas*): en el ZKTeco solo se registra la huella con el **mismo número de empleado** que en Personal. El paso "Registra tu huella" de la bienvenida se marca solo con su primera checada del ZKTeco. (El kiosco web con QR se dio de baja en octubre de 2026.)
 
 ## Instalación (una sola vez)
 
