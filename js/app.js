@@ -347,6 +347,7 @@ const estadoBadge = e => { const [l, c] = ESTADOS[e] || [e, 'muted']; return h('
 const TIPO_MARCA = { ENTRADA: 'Entrada', SALIDA_COMIDA: 'Salió a comer', REGRESO_COMIDA: 'Regresó', SALIDA: 'Salida' };
 
 function reciboBadges(r) {
+  if (r.historico) return h('span', { class: 'row wrap gap4' }, h('span', { class: 'badge b-info' }, 'Histórico'), h('span', { class: 'badge b-ok' }, 'Pagado'));
   return h('span', { class: 'row wrap gap4' },
     r.estatus === 'cancelado' ? h('span', { class: 'badge b-err' }, 'Cancelado') : r.estatus === 'pagado' ? h('span', { class: 'badge b-ok' }, 'Pagado') : h('span', { class: 'badge b-warn' }, 'Por pagar'),
     r.estatus !== 'cancelado' && (r.firma_fecha ? h('span', { class: 'badge b-info' }, '✓ Firmado') : h('span', { class: 'badge b-warn' }, 'Por firmar')));
@@ -586,6 +587,15 @@ async function reciboView(id, back) {
   const propio = r.no_empleado === session.user.no_empleado;
   const a = r.detalle.asistencia || {};
   const line = (l, v, sub) => v ? h('div', { class: 'rl' }, h('span', {}, l, sub && h('small', { class: 'muted' }, ' ' + sub)), h('span', { class: 'amount' }, money(v))) : null;
+  if (r.historico) return fill(body,
+    h('div', { class: 'receipt' },
+      h('div', { class: 'r-head' }, h('div', {}, h('span', { class: 'muted small' }, 'Comercializadora Computenga'), h('h2', {}, r.etiqueta), h('span', { class: 'muted small' }, `${r.nombre} · No. ${r.no_empleado}`)),
+        h('span', { class: 'muted small mono' }, r.recibo_id)),
+      h('div', { class: 'r-neto' }, h('span', {}, 'Neto pagado'), h('strong', {}, money(r.neto))),
+      reciboBadges(r),
+      h('p', { class: 'small', style: 'margin-top:12px' }, '📜 ', r.detalle.notas || 'Recibo histórico: monto neto que se pagó, sin desglose.'),
+      r.desde && h('p', { class: 'muted small' }, `Periodo ${fecha(r.desde)} – ${fecha(r.hasta)}`),
+      h('p', { class: 'muted tiny' }, 'Comprobante interno. No sustituye al CFDI de nómina.')));
   fill(body,
     h('div', { class: 'receipt' },
       h('div', { class: 'r-head' }, h('div', {}, h('span', { class: 'muted small' }, 'Comercializadora Computenga'), h('h2', {}, r.etiqueta), h('span', { class: 'muted small' }, `${r.nombre} · No. ${r.no_empleado}`)),

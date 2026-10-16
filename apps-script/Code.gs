@@ -594,7 +594,7 @@ function inicio_(req, u) {
     hoy_detalle: a.dias.find(d => d.fecha === hoy) || null,
     horario: a.horario,
     ultimo_recibo: recibos[0] || null,
-    recibos_sin_firmar: recibos.filter(r => !r.firma_fecha && r.estatus !== 'cancelado').length,
+    recibos_sin_firmar: recibos.filter(r => !r.firma_fecha && r.estatus !== 'cancelado' && !r.historico).length,
     ultimo_pago: pagos[0] || null,
     no_leidos: band.filter(n => !n.leido).length,
     saldo_adeudos: ad.saldo_total,
@@ -954,7 +954,8 @@ function pickRecibo_(r) {
   try { det = JSON.parse(r.detalle_json || '{}'); } catch (e) {}
   const per = (() => { try { return periodo_(r.periodo); } catch (e) { return { etiqueta: r.periodo }; } })();
   return {
-    recibo_id: r.recibo_id, no_empleado: String(r.no_empleado), nombre: r.nombre, periodo: r.periodo, etiqueta: per.etiqueta,
+    recibo_id: r.recibo_id, no_empleado: String(r.no_empleado), nombre: r.nombre, periodo: r.periodo, etiqueta: det.etiqueta || per.etiqueta,
+    historico: r.estatus === 'historico',
     desde: fmt_(r.desde, 'yyyy-MM-dd'), hasta: fmt_(r.hasta, 'yyyy-MM-dd'), dias: Number(r.dias), salario_diario: Number(r.salario_diario),
     sueldo: Number(r.sueldo), bonos: Number(r.bonos), otras_percepciones: Number(r.otras_percepciones),
     desc_faltas: Number(r.desc_faltas), desc_retardos: Number(r.desc_retardos), desc_cargos: Number(r.desc_cargos),
@@ -983,12 +984,93 @@ function firmarRecibo_(req, u) {
     const r = reciboPropio_(req.recibo_id, u);
     if (String(r.no_empleado) !== u.no_empleado) throw new Error('Solo el empleado puede firmar su recibo');
     if (r.estatus === 'cancelado') throw new Error('Este recibo fue cancelado');
+    if (r.estatus === 'historico') throw new Error('Los recibos históricos no se firman');
     if (r.firma_fecha) return pickRecibo_(r);
     const p = persona_(u.no_empleado);
     if (hashPin_(p.no_empleado, String(req.pin || '')) !== p.pin_hash) throw new Error('PIN incorrecto');
     update_('Recibos', r._row, { firma_fecha: new Date(), firma_dispositivo: String(req.dispositivo || '').slice(0, 200) });
     bitacora_(u.no_empleado, 'firmar_recibo', 'Recibos', r.recibo_id, '');
     return pickRecibo_(rows_('Recibos').find(x => x.recibo_id === r.recibo_id));
+  });
+}
+
+// ───────────────────────── Carga de nómina histórica ─────────────────────────
+
+/**
+ * Carga recibos históricos (solo neto pagado, sin desglose) desde un JSON en Drive llamado
+ * "historico_nomina.json". Se ejecuta a mano desde el editor. No firma, no notifica, no duplica:
+ * si el empleado ya tiene recibo vivo de esa quincena, se lo salta y lo reporta.
+ * JSON: { personas:[{no,nombre}], renombrar:{no:nombre}, salarios:{no:diario}, config:{clave:valor},
+ *         recibos:[{no,nombre,periodo,etiqueta,desde,hasta,neto,tipo}] }
+ */
+function importarHistoricoNomina() {
+  const it = DriveApp.getFilesByName('historico_nomina.json');
+  if (!it.hasNext()) throw new Error('No encontré historico_nomina.json en Drive');
+  let f = it.next();
+  while (it.hasNext()) { const g = it.next(); if (g.getLastUpdated() > f.getLastUpdated()) f = g; }
+  const res = importarHistorico_(JSON.parse(f.getBlob().getDataAsString()));
+  console.log(JSON.stringify(res));
+  return res;
+}
+
+function importarHistorico_(d) {
+  return withLock_(() => {
+    const res = { personas_nuevas: 0, renombrados: 0, salarios: 0, recibos: 0, duplicados: [], sin_persona: [] };
+    const personal = () => rows_('Personal');
+    // 1) Ex-empleados como baja
+    const nuevas = (d.personas || []).filter(x => !personal().find(p => String(p.no_empleado) === String(x.no)));
+    if (nuevas.length) {
+      const h = headers_('Personal');
+      const filas = nuevas.map(x => h.map(k => ({ no_empleado: String(x.no), nombre: x.nombre, rol: 'empleado', estatus: 'baja',
+        pin_intentos: 0, pin_bloqueado: 'NO', notas: 'Alta automática por historial de nómina', actualizado: new Date() })[k] ?? ''));
+      const sh = sheet_('Personal');
+      sh.getRange(sh.getLastRow() + 1, 1, filas.length, h.length).setValues(filas);
+      delete _cache['r:Personal'];
+      res.personas_nuevas = filas.length;
+    }
+    // 2) Correcciones de nombre
+    Object.keys(d.renombrar || {}).forEach(no => {
+      const p = personal().find(x => String(x.no_empleado) === String(no));
+      if (p && p.nombre !== d.renombrar[no]) { update_('Personal', p._row, { nombre: d.renombrar[no], actualizado: new Date() }); res.renombrados++; }
+    });
+    // 3) Salario diario (solo si está vacío o en 0)
+    Object.keys(d.salarios || {}).forEach(no => {
+      const p = personal().find(x => String(x.no_empleado) === String(no));
+      if (p && !Number(p.salario_diario) && Number(d.salarios[no]) > 0) { update_('Personal', p._row, { salario_diario: Number(d.salarios[no]) }); res.salarios++; }
+    });
+    Object.keys(d.config || {}).forEach(k => setConfig_(k, d.config[k]));
+    // 4) Recibos
+    const existentes = {};
+    rows_('Recibos').filter(r => r.estatus !== 'cancelado').forEach(r => existentes[String(r.no_empleado) + '|' + r.periodo] = r.recibo_id);
+    const nombres = {};
+    personal().forEach(p => nombres[String(p.no_empleado)] = p.nombre);
+    const h = headers_('Recibos');
+    const filas = [];
+    (d.recibos || []).forEach(x => {
+      const no = String(x.no), key = no + '|' + x.periodo;
+      if (!(no in nombres)) { res.sin_persona.push(key); return; }
+      if (existentes[key]) { res.duplicados.push(key + ' (' + existentes[key] + ')'); return; }
+      existentes[key] = 'HIS';
+      const neto = round_(Number(x.neto), 2);
+      const rec = {
+        recibo_id: 'HIS-' + no + '-' + x.periodo, no_empleado: no, nombre: nombres[no] || x.nombre, periodo: x.periodo,
+        desde: parseFecha_(x.desde), hasta: parseFecha_(x.hasta), dias: 0, salario_diario: 0, sueldo: 0, bonos: 0,
+        otras_percepciones: neto, desc_faltas: 0, desc_retardos: 0, desc_cargos: 0, desc_adeudos: 0, otras_deducciones: 0,
+        total_percepciones: neto, total_deducciones: 0, neto: neto,
+        detalle_json: JSON.stringify({ historico: true, tipo: x.tipo || 'quincena', etiqueta: x.etiqueta, concepto_otras: 'Neto pagado (sin desglose)',
+          notas: 'Recibo histórico: monto neto que se pagó. En ese entonces no se desglosaban bonos ni descuentos.' }),
+        estatus: 'historico', fecha_emision: new Date(), emitido_por: 'historico',
+      };
+      filas.push(h.map(k => rec[k] === undefined ? '' : rec[k]));
+    });
+    if (filas.length) {
+      const sh = sheet_('Recibos');
+      sh.getRange(sh.getLastRow() + 1, 1, filas.length, h.length).setValues(filas);
+      delete _cache['r:Recibos'];
+    }
+    res.recibos = filas.length;
+    bitacora_('sistema', 'importar_historico', 'Recibos', '', JSON.stringify({ recibos: res.recibos, personas: res.personas_nuevas, duplicados: res.duplicados.length }));
+    return res;
   });
 }
 
@@ -1776,7 +1858,7 @@ function panel_() {
     nomina: {
       recibos_periodo_anterior: recibos.filter(r => r.periodo === ant.id).length,
       recibos_periodo: recibos.filter(r => r.periodo === per.id).length,
-      sin_firmar: recibos.filter(r => !r.firma_fecha).length,
+      sin_firmar: recibos.filter(r => !r.firma_fecha && r.estatus !== 'historico').length,
       sin_pagar: recibos.filter(r => r.estatus === 'emitido').length,
       pagos_semana: round_(pagos.reduce((s, p) => s + p.monto, 0), 2),
       pagos_no_cuadran: pagos.filter(p => p.cuadra === 'NO').length,

@@ -707,4 +707,35 @@ t('operación: GPS de Shipday en prueba, recolecciones con aprobación y alcance
   ok(call('guardarClaves', { tomtom: '-' }, admin));
 });
 
+t('nómina histórica: sin firma, sin duplicados, ex-empleados como baja', () => {
+  const recPer = ok(call('recibo', { recibo_id: rec4.recibo_id }, tok4)).periodo;
+  const pushes0 = env.pushes.length;
+  const d = {
+    personas: [{ no: '4', nombre: 'Saidd' }, { no: '77', nombre: 'Ex Empleado' }],
+    salarios: { '77': 314.75, '4': 999 }, config: { DIAS_QUINCENA: 15.25 },
+    recibos: [
+      { no: '4', periodo: '2024-03-1', etiqueta: '1ª quincena de marzo 2024', desde: '2024-03-01', hasta: '2024-03-15', neto: 5500 },
+      { no: '4', periodo: recPer, etiqueta: 'x', desde: '2026-01-01', hasta: '2026-01-15', neto: 1 },
+      { no: '4', periodo: 'AGU-2024', etiqueta: 'Aguinaldo 2024', desde: '2024-12-01', hasta: '2024-12-20', neto: 3000, tipo: 'aguinaldo' },
+      { no: '77', periodo: '2023-01-2', etiqueta: '2ª quincena de enero 2023', desde: '2023-01-16', hasta: '2023-01-31', neto: 4800 },
+      { no: '999', periodo: '2023-01-2', etiqueta: 'y', desde: '2023-01-16', hasta: '2023-01-31', neto: 1 },
+    ],
+  };
+  const r = run('importarHistorico_', d);
+  assert.strictEqual(r.recibos, 3); assert.strictEqual(r.personas_nuevas, 1);
+  assert.strictEqual(r.duplicados.length, 1); assert.strictEqual(JSON.stringify(r.sin_persona), '["999|2023-01-2"]');
+  assert.strictEqual(r.salarios, 1, 'no pisa salario existente');
+  assert.strictEqual(run('importarHistorico_', d).recibos, 0, 'segunda corrida no duplica');
+  assert.strictEqual(env.pushes.length, pushes0, 'sin push');
+  const l = ok(call('recibos', {}, tok4));
+  const h = l.find(x => x.periodo === '2024-03-1');
+  assert(h.historico && h.estatus === 'historico' && h.neto === 5500);
+  assert.strictEqual(l.find(x => x.periodo === 'AGU-2024').etiqueta, 'Aguinaldo 2024');
+  fail(call('firmarRecibo', { recibo_id: h.recibo_id, pin: '204060' }, tok4), /históricos no se firman/);
+  assert.strictEqual(ok(call('inicio', {}, tok4)).recibos_sin_firmar, 0);
+  const p77 = ok(call('personal', {}, admin)).find(p => p.no_empleado === '77');
+  assert.strictEqual(p77.estatus, 'baja');
+  fail(call('login', { rfc: '', no_empleado: '77' }), /./);
+});
+
 console.log(`\n${passed} pruebas OK`);
