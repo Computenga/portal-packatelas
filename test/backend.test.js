@@ -726,6 +726,8 @@ t('nómina histórica: sin firma, sin duplicados, ex-empleados como baja', () =>
   assert.strictEqual(r.duplicados.length, 1); assert.strictEqual(JSON.stringify(r.sin_persona), '["999|2023-01-2"]');
   assert.strictEqual(r.salarios, 1, 'no pisa salario existente');
   assert.strictEqual(run('importarHistorico_', d).recibos, 0, 'segunda corrida no duplica');
+  const c = run('expandirHistorico_', { q: { '4': { '2024-03-2': 10, 'AGU-2023': 5 } } });
+  assert.strictEqual(c.recibos[0].hasta, '2024-03-31'); assert.strictEqual(c.recibos[1].etiqueta, 'Aguinaldo 2023');
   assert.strictEqual(env.pushes.length, pushes0, 'sin push');
   const l = ok(call('recibos', {}, tok4));
   const h = l.find(x => x.periodo === '2024-03-1');

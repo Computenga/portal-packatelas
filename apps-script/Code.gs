@@ -1008,9 +1008,21 @@ function importarHistoricoNomina() {
   if (!it.hasNext()) throw new Error('No encontré historico_nomina.json en Drive');
   let f = it.next();
   while (it.hasNext()) { const g = it.next(); if (g.getLastUpdated() > f.getLastUpdated()) f = g; }
-  const res = importarHistorico_(JSON.parse(f.getBlob().getDataAsString()));
+  const res = importarHistorico_(expandirHistorico_(JSON.parse(f.getBlob().getDataAsString())));
   console.log(JSON.stringify(res));
   return res;
+}
+
+/** Formato compacto: { q: { no: { 'yyyy-MM-1': neto, 'AGU-2024': neto } } } → recibos completos. */
+function expandirHistorico_(d) {
+  if (!d.q) return d;
+  d.recibos = d.recibos || [];
+  Object.keys(d.q).forEach(no => Object.keys(d.q[no]).forEach(pid => {
+    const ag = pid.match(/^AGU-(\d{4})$/);
+    const per = ag ? { etiqueta: 'Aguinaldo ' + ag[1], desde: ag[1] + '-12-01', hasta: ag[1] + '-12-20' } : periodo_(pid);
+    d.recibos.push({ no: no, periodo: pid, etiqueta: per.etiqueta, desde: per.desde, hasta: per.hasta, neto: d.q[no][pid], tipo: ag ? 'aguinaldo' : 'quincena' });
+  }));
+  return d;
 }
 
 function importarHistorico_(d) {
