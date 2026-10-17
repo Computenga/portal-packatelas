@@ -12,7 +12,7 @@ App web instalable (PWA) para empleados y patrón: asistencia del checador, reci
 | App | GitHub Pages: `https://computenga.github.io/portal-packatelas/` |
 | API | Apps Script (Web App) "Portal Packatelas API", código en `apps-script/` |
 | **Base maestra** | La hoja **"checador packatelas"**. El checador sigue escribiendo en *Empleados*, *Checadas* y *Justificadas*; el portal agrega *Personal, Recibos, Pagos, Adeudos, Abonos, Solicitudes, Bandeja, Dispositivos, Bitacora, ConfigPortal* |
-| Flotilla | Sigue en su hoja; el portal lee de ahí los cargos al empleado (Reparaciones con `monto_empleado`) |
+| Flotilla | Sigue en su hoja. Cada empleado es `U-[número]` en la flotilla: el portal lee sus cargos (Reparaciones con `monto_empleado`) sin llenar `flotilla_id`, muestra "Mi moto hoy" en Inicio y abre la flotilla dentro del portal (Más → Flotilla) con la misma sesión |
 | Recibos PDF, evidencias, expedientes | Drive, carpeta "Portal Packatelas" (se crea sola) |
 | Pagos | Correos "Transferencia exitosa" de Fondeadora en Gmail, revisados cada 5 min |
 | Push | Firebase, el mismo proyecto `flotilla-packatelas` |

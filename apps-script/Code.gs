@@ -604,6 +604,7 @@ function inicio_(req, u) {
     bienvenida: (b => ({ hechos: b.hechos, total: b.total, completa: b.completa, siguiente: b.siguiente })) (bienvenida_(u.no_empleado)),
     accesos: appsPara_(u.no_empleado).filter(a => a.acceso_directo),
     ruta: rutaResumen_(u.no_empleado),
+    flotilla: flotillaHoy_(u.no_empleado),
   };
 }
 
@@ -829,7 +830,7 @@ function prenomina_(periodoId) {
     const a = asistenciaEmpleado_(no, per.id);
     const sd = Number(p.salario_diario || 0);
     const vh = sd / horasJ;
-    const cargos = p.flotilla_id ? cargosFl.filter(c => c.responsable_id === String(p.flotilla_id) && !cobrados[c.rep_id] && c.fecha <= per.hasta) : [];
+    const cargos = cargosFl.filter(c => c.responsable_id === flotillaId_(p) && !cobrados[c.rep_id] && c.fecha <= per.hasta);
     const abonos = adeudos.filter(x => String(x.no_empleado) === no).map(x => ({ adeudo_id: x.adeudo_id, concepto: x.concepto,
       monto: round_(Math.min(Number(x.cuota || x.saldo), Number(x.saldo)), 2), saldo: Number(x.saldo) }));
     const ya = recibos.find(r => String(r.no_empleado) === no && r.periodo === per.id);
@@ -1236,6 +1237,34 @@ function pagoManual_(req, u) {
 
 // ───────────────────────── Adeudos y cargos de flotilla ─────────────────────────
 
+/** En la flotilla, cada usuario es "U-" + número de empleado (el del ZKTeco). */
+function flotillaId_(p) { return 'U-' + String(p.no_empleado).trim(); }
+
+/**
+ * Estado de flotilla del día para la tarjeta "Mi moto hoy" del Inicio (null si no tiene acceso a la flotilla).
+ * repartidor: check matutino y carga de hoy; mecánico/admin: además, fallas pendientes de toda la flotilla.
+ */
+function flotillaHoy_(no) {
+  try {
+    const fl = SpreadsheetApp.openById(FLOTILLA_ID);
+    const id = flotillaId_({ no_empleado: no });
+    const u = sheetRows_(fl.getSheetByName('Usuarios')).find(x => String(x.usuario_id) === id && x.activo === 'SI');
+    if (!u) return null;
+    const hoy = hoy_();
+    const check = sheetRows_(fl.getSheetByName('Checks'))
+      .filter(x => x.tipo === 'matutino' && String(x.usuario_id) === id && fmt_(x.fecha_hora, 'yyyy-MM-dd') === hoy).pop();
+    const carga = check ? sheetRows_(fl.getSheetByName('Combustible')).find(x => x.check_id === check.check_id) : null;
+    const fallas = sheetRows_(fl.getSheetByName('Fallas')).filter(f => f.estatus === 'abierta' || f.estatus === 'en_reparacion');
+    return {
+      rol: String(u.rol),
+      check: check ? { vehiculo_id: String(check.vehiculo_id), hora: fmt_(check.fecha_hora, 'HH:mm') } : null,
+      carga: carga ? { monto: Number(carga.monto) } : null,
+      mis_fallas: fallas.filter(f => String(f.responsable_id) === id).length,
+      fallas_pendientes: u.rol === 'repartidor' ? null : fallas.length,
+    };
+  } catch (e) { console.warn('flotillaHoy', e); return null; }
+}
+
 /** Reparaciones con monto a cargo del empleado (hoja de la flotilla). */
 function cargosFlotilla_() {
   if (_cache.cargosFl) return _cache.cargosFl;
@@ -1262,7 +1291,7 @@ function adeudosDe_(no) {
   rows_('Recibos').filter(r => r.estatus !== 'cancelado' && String(r.no_empleado) === String(no)).forEach(r => {
     try { (JSON.parse(r.detalle_json || '{}').cargos || []).forEach(c => cobrados[c.rep_id] = r.recibo_id); } catch (e) {}
   });
-  const cargos = p.flotilla_id ? cargosFlotilla_().filter(c => c.responsable_id === String(p.flotilla_id))
+  const cargos = p.no_empleado ? cargosFlotilla_().filter(c => c.responsable_id === flotillaId_(p))
     .map(c => Object.assign({}, c, { recibo_id: cobrados[c.rep_id] || '', estatus: cobrados[c.rep_id] ? 'descontado' : 'pendiente' }))
     .sort((a, b) => b.fecha.localeCompare(a.fecha)) : [];
   return {
@@ -1282,7 +1311,7 @@ function adeudosAdmin_() {
   return {
     adeudos: rows_('Adeudos').map(pickAdeudo_).sort((a, b) => (a.estatus === 'activo' ? 0 : 1) - (b.estatus === 'activo' ? 0 : 1) || b.fecha_alta.localeCompare(a.fecha_alta)),
     cargos: cargosFlotilla_().map(c => {
-      const p = per.find(x => String(x.flotilla_id) === c.responsable_id);
+      const p = per.find(x => flotillaId_(x) === c.responsable_id);
       return Object.assign({}, c, { no_empleado: p ? String(p.no_empleado) : '', nombre: p ? p.nombre : '(sin ligar: ' + c.responsable_id + ')' });
     }).sort((a, b) => b.fecha.localeCompare(a.fecha)),
   };

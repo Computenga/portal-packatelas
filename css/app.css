@@ -418,3 +418,11 @@ td .badge { margin: 1px 0; }
 .gap8 { gap: 8px; }
 .b-muted { background: var(--line); color: var(--muted); }
 .chip.sm { padding: 4px 10px; font-size: 0.78rem; }
+
+/* Flotilla integrada */
+.fl-frame { display: block; width: 100%; height: calc(100vh - 58px - env(safe-area-inset-top, 0px)); height: calc(100dvh - 58px - env(safe-area-inset-top, 0px)); border: 0; background: var(--bg); }
+.fl-card .fl-step { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: 0; border-top: 1px solid var(--line); padding: 10px 0; cursor: pointer; color: inherit; font: inherit; }
+.fl-card .fl-step span:last-child { display: flex; flex-direction: column; }
+.fl-dot { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; flex: none; background: var(--line); }
+.fl-step.ok .fl-dot { background: var(--ok, #1e8e5a); color: #fff; }
+.fl-step.todo .fl-dot { background: var(--accent, #f5a524); color: #2b1a00; }

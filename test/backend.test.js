@@ -34,10 +34,10 @@ const maestro = new Spreadsheet({ Empleados: empleados, Checadas: checadas, Just
 
 const flotilla = new Spreadsheet({
   Reparaciones: new Sheet('Reparaciones', [['rep_id', 'falla_id', 'vehiculo_id', 'mecanico_id', 'fecha_inicio', 'fecha_cierre', 'horas_respuesta', 'horas_reparacion', 'descripcion', 'foto_1', 'foto_2', 'foto_3', 'foto_4', 'costo_refacciones', 'costo_mano_obra', 'costo_total', 'causa', 'responsable_id', 'monto_empleado', 'monto_empresa', 'notificado_repartidor'],
-    ['R-000001', 'F-000001', 'M-02', 'U-003', D('2026-10-09'), D('2026-10-10'), 2, 5, 'Cambio de espejo', '', '', '', '', 350, 0, 350, 'mal_uso', 'U-005', 350, 0, 'SI'],
-    ['R-000002', 'F-000002', 'M-03', 'U-003', D('2026-10-09'), D('2026-10-10'), 2, 5, 'Balatas', '', '', '', '', 500, 0, 500, 'desgaste', 'U-005', 0, 500, '']]),
+    ['R-000001', 'F-000001', 'M-02', 'U-3', D('2026-10-09'), D('2026-10-10'), 2, 5, 'Cambio de espejo', '', '', '', '', 350, 0, 350, 'mal_uso', 'U-5', 350, 0, 'SI'],
+    ['R-000002', 'F-000002', 'M-03', 'U-3', D('2026-10-09'), D('2026-10-10'), 2, 5, 'Balatas', '', '', '', '', 500, 0, 500, 'desgaste', 'U-5', 0, 500, '']]),
   Fallas: new Sheet('Fallas', [['falla_id', 'tipo', 'check_id', 'fecha_reporte', 'reportada_por', 'responsable_id', 'vehiculo_id', 'descripcion'],
-    ['F-000001', 'no_reportado', '', D('2026-10-09'), 'U-005', 'U-005', 'M-02', 'Espejo izquierdo roto']]),
+    ['F-000001', 'no_reportado', '', D('2026-10-09'), 'U-5', 'U-5', 'M-02', 'Espejo izquierdo roto']]),
 });
 
 const gmail = [];
@@ -80,7 +80,7 @@ t('primer acceso: RFC + No. de empleado y crear PIN', () => {
 t('patrón edita expedientes; valida CLABE y RFC', () => {
   fail(call('guardarPersona', { persona: { no_empleado: '4', clabe: '012180015237752340' } }, admin), CLABE4.endsWith('0') ? /x^/ : /CLABE/);
   ok(call('guardarPersona', { persona: { no_empleado: '4', rfc: 'LOAS950505H12', clabe: CLABE4, salario_diario: 320, puesto: 'Repartidor' } }, admin));
-  ok(call('guardarPersona', { persona: { no_empleado: '5', rfc: 'RUCA990909MX1', clabe: CLABE5, salario_diario: 300, flotilla_id: 'U-005', puesto: 'Repartidora' } }, admin));
+  ok(call('guardarPersona', { persona: { no_empleado: '5', rfc: 'RUCA990909MX1', clabe: CLABE5, salario_diario: 300, flotilla_id: 'U-5', puesto: 'Repartidora' } }, admin));
   fail(call('guardarPersona', { persona: { no_empleado: '92', rfc: 'LOAS950505H12' } }, admin), /ya es de/);
   fail(call('guardarPersona', { persona: { no_empleado: '1', rol: 'empleado' } }, admin), /a ti mismo/);
   tok4 = ok(call('primerAcceso', { rfc: 'LOAS950505H12', no_empleado: '4', pin: '204060' })).token;

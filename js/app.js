@@ -362,6 +362,7 @@ VIEWS.inicio = async function inicio() {
   try { ({ data: d, offline } = await cached('inicio', {}, live(inicio))); } catch (e) { return fill(body, errorBox(e, inicio)); }
   setBadge(d.no_leidos);
   state.repartidor = !!d.repartidor;
+  state.flotilla = d.flotilla || null;
   const a = d.asistencia, hd = d.hoy_detalle;
   fill(body,
     h('p', { class: 'muted cap' }, hoyLargo()),
@@ -374,6 +375,7 @@ VIEWS.inicio = async function inicio() {
       h('div', { class: 'row between' }, h('h3', {}, '🗺️ ' + (d.ruta.fecha === d.hoy ? 'Tu ruta de hoy' : 'Tu ruta del ' + fecha(d.ruta.fecha))), h('span', { class: 'chev' }, '›')),
       h('p', { class: 'small' }, h('strong', {}, `${d.ruta.paradas} paradas`), ` · ${d.ruta.envios} envíos · sales ${d.ruta.salida} · terminas aprox ${d.ruta.fin}`),
       h('span', { class: 'btn primary sm' }, 'Ver mapa y paradas')),
+    flotillaCard(d.flotilla),
     d.recibos_sin_firmar > 0 && h('button', { class: 'banner action warn', onclick: () => go('nomina') },
       h('strong', {}, `🧾 Tienes ${d.recibos_sin_firmar} recibo${d.recibos_sin_firmar > 1 ? 's' : ''} por firmar`), h('span', {}, 'Revísalo y confirma de recibido →')),
 
@@ -414,6 +416,42 @@ VIEWS.inicio = async function inicio() {
       h('button', { class: 'q', onclick: () => documentosView() }, h('span', {}, '📄'), 'Documentos')),
   );
 };
+
+// ═════════ Flotilla (integrada) ═════════
+// La app de flotilla vive en computenga.github.io/flotilla-packatelas y comparte el almacenamiento del
+// navegador con el portal: entra sola con la sesión del portal (sin otro PIN). Aquí se muestra dentro del portal.
+const FLOTILLA_URL = '../flotilla-packatelas/';
+
+function flotillaCard(f) {
+  if (!f) return null;
+  if (f.rol !== 'repartidor') {
+    return h('button', { class: 'card tap row between', onclick: () => flotillaView('fallas') },
+      h('div', {}, h('h3', {}, '🛵 Flotilla'), h('span', { class: 'muted small' }, f.fallas_pendientes ? `${f.fallas_pendientes} falla(s) pendiente(s) de reparar` : 'Sin fallas pendientes')),
+      h('span', { class: 'chev' }, '›'));
+  }
+  const paso = (okk, txt, sub, dest) => h('button', { class: 'fl-step ' + (okk ? 'ok' : 'todo'), onclick: e => { e.stopPropagation(); flotillaView(dest); } },
+    h('span', { class: 'fl-dot' }, okk ? '✓' : '•'), h('span', {}, h('strong', {}, txt), h('small', { class: 'muted' }, sub)));
+  return h('div', { class: 'card fl-card' },
+    h('div', { class: 'row between' }, h('h3', {}, '🛵 Mi moto hoy'), h('button', { class: 'link', onclick: () => flotillaView() }, 'Abrir flotilla')),
+    paso(!!f.check, 'Check matutino', f.check ? `Moto ${f.check.vehiculo_id} · ${f.check.hora}` : '4 fotos, odómetro y fallas', f.check ? 'jornada' : 'check'),
+    paso(!!f.carga, 'Carga de gasolina', f.carga ? `Registrada · ${money(f.carga.monto)}` : f.check ? 'Monto, litros y ticket' : 'Después del check', f.check && !f.carga ? 'carga' : 'jornada'),
+    h('div', { class: 'row', style: 'gap:8px;margin-top:8px' },
+      h('button', { class: 'btn sm', onclick: () => flotillaView('ruta') }, '⚠️ Reportar daño'),
+      h('button', { class: 'btn sm', onclick: () => flotillaView('historial') }, f.mis_fallas ? `Mis fallas (${f.mis_fallas})` : 'Mis fallas y cargos')));
+}
+
+function flotillaView(destino) {
+  const prev = state.tab;
+  state.seq++;
+  const src = FLOTILLA_URL + '?embed=1' + (destino ? '#' + destino : '');
+  const frame = h('iframe', { class: 'fl-frame', src, title: 'Flotilla', allow: 'camera; geolocation' });
+  $app.replaceChildren(
+    h('header', { class: 'topbar' + (modoPatron() ? ' patron' : '') },
+      h('button', { class: 'icon-btn', 'aria-label': 'Regresar al portal', onclick: () => { go(prev || (modoPatron() ? 'pmas' : 'inicio')); } }, '←'),
+      h('div', { class: 'tb-title' }, h('h1', {}, 'Flotilla'), h('span', { class: 'tb-sub' }, 'Regresar al portal')),
+      h('button', { class: 'icon-btn', 'aria-label': 'Recargar', onclick: () => { frame.src = src; } }, '↻')),
+    frame);
+}
 
 // ═════════ Bienvenida, apps y accesos ═════════
 const isAndroid = () => /android/i.test(navigator.userAgent);
@@ -718,6 +756,7 @@ VIEWS.mas = async function mas() {
       ['👋', 'Mi bienvenida', 'Pasos para empezar a trabajar', bienvenidaView],
       isAdmin() && !isPatron() && ['🧭', 'Rutas y reporte', 'Ruteador, rutas publicadas y reporte de Shipday', () => rutasAdminView()],
       isAdmin() && !isPatron() && ['📦', 'Recolecciones', 'Asignación de recolecciones del día', () => recoleccionesView()],
+      state.flotilla && ['🛵', 'Flotilla', state.flotilla.rol === 'repartidor' ? 'Check de moto, gasolina, fallas y cargos' : 'Fallas, reparaciones, documentos y métricas', () => flotillaView()],
       esRepartidor() && ['🗺️', 'Mi ruta', 'Paradas en orden y mapa', () => rutaView()],
       esRepartidor() && ['📱', 'Apps y accesos', 'Instala y abre tus apps de trabajo', () => appsView('instalar')],
       ['👤', 'Mis datos', 'RFC, CLABE, horario, antigüedad', perfilView],
@@ -1305,6 +1344,7 @@ VIEWS.pmas = function pmas() {
       h('div', {}, h('h3', {}, '👤 Ver mi portal de empleado'), h('p', { class: 'muted small' }, 'Tu asistencia, tus recibos y depósitos')), h('span', { class: 'chev' }, '›')),
     menu([
       ['🗺️', 'Rutas y reporte', 'Ruteador, rutas publicadas y reporte de Shipday', () => rutasAdminView()],
+      ['🛵', 'Flotilla', 'Fallas, reparaciones, documentos y métricas de motos', () => flotillaView('dashboard')],
       ['📦', 'Recolecciones', 'Asignación automática de recolecciones del día', () => recoleccionesView()],
       ['🔗', 'Repartidores en Shipday', 'Vincula cada repartidor de Shipday con su empleado', () => shipdayVincularView()],
       ['🛰️', 'GPS de Shipday (prueba)', 'Qué tan seguido se actualiza la ubicación y paradas detectadas', () => gpsPruebaView()],

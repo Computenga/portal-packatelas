@@ -224,7 +224,9 @@ export function handle(action, d, token) {
         cargos_pendientes: p.flotilla_id ? cargos.filter(c => c.responsable_id === p.flotilla_id && !c.cobrado).reduce((s, c) => s + c.monto, 0) : 0,
         solicitudes_pendientes: solicitudes.filter(s => s.no_empleado === p.no_empleado && s.estatus === 'pendiente').length,
         repartidor: esRep(p), bienvenida: bienv(p), accesos: appsPara(p).filter(a => a.acceso_directo),
-        ruta: esRep(p) ? { ruta_id: 'RT-000001', fecha: hoy, paradas: RUTA_DEMO.paradas.length, envios: 7, salida: '10:00', fin: '13:05' } : null };
+        ruta: esRep(p) ? { ruta_id: 'RT-000001', fecha: hoy, paradas: RUTA_DEMO.paradas.length, envios: 7, salida: '10:00', fin: '13:05' } : null,
+        flotilla: esRep(p) ? { rol: 'repartidor', check: { vehiculo_id: 'M-04', hora: '09:12' }, carga: null, mis_fallas: 1, fallas_pendientes: null }
+          : p.rol === 'patron' ? { rol: 'admin', check: null, carga: null, mis_fallas: 0, fallas_pendientes: 3 } : null };
     }
     case 'perfil': { const p = me(token); const ing = p.ingreso || ''; const anios = ing ? Math.floor((HOY - new Date(ing)) / 3.156e10) : 0;
       return { ...p, fecha_ingreso: ing, antiguedad: ing ? `${anios} año(s)` : '', clabe: p.clabe ? '•••• ' + p.clabe.slice(-4) : '', banco: p.clabe ? 'BBVA' : '', horario: { entrada: p.entrada, dias: p.dias, comida: p.entrada ? 60 : '' }, celular_checador: true,
