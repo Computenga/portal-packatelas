@@ -3126,7 +3126,7 @@ function historialCalcular_(desde, hasta) {
 
 /**
  * Recalcular varios días toma tiempo (Shipday permite 5 consultas por minuto): se hace en segundo plano en tramos
- * de 3 días; cada ejecución avanza lo que alcanza en ~4.5 min y se vuelve a programar sola hasta terminar.
+ * de 1 día; cada ejecución avanza lo que alcanza en ~3 min y se vuelve a programar sola hasta terminar.
  */
 function historialProgramar_(desde, hasta) {
   setProp_('HIST_JOB', JSON.stringify({ desde: desde, hasta: hasta, cursor: desde, inicio: now_() }));
@@ -3134,23 +3134,31 @@ function historialProgramar_(desde, hasta) {
   ScriptApp.newTrigger('tareaHistorialJob').timeBased().after(30 * 1000).create();
   return { programado: true, desde: desde, hasta: hasta };
 }
+function borrarTriggersJob_() { ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction && t.getHandlerFunction() === 'tareaHistorialJob').forEach(t => ScriptApp.deleteTrigger(t)); }
 function tareaHistorialJob() {
   let job = {}; try { job = JSON.parse(prop_('HIST_JOB') || '{}'); } catch (e) {}
-  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction && t.getHandlerFunction() === 'tareaHistorialJob').forEach(t => ScriptApp.deleteTrigger(t));
+  borrarTriggersJob_();
   if (!job.cursor) return;
+  // red de seguridad: si esta ejecución se corta por el límite de 6 min, la siguiente sigue donde se quedó
+  ScriptApp.newTrigger('tareaHistorialJob').timeBased().after(7 * 60 * 1000).create();
   const t0 = Date.now();
-  while (job.cursor <= job.hasta && Date.now() - t0 < 4 * 60000) {
-    const fin = addDias_(job.cursor, 2) < job.hasta ? addDias_(job.cursor, 2) : job.hasta;
+  while (job.cursor <= job.hasta && Date.now() - t0 < 2.5 * 60000) {
+    const fin = job.cursor;
     const r = historialCalcular_(job.cursor, fin);
     console.log(job.cursor + ' → ' + fin + ': ' + r.entregados + ' entregas, ' + r.ordenes + ' órdenes, ' + r.sin_vincular + ' sin vincular');
     job.cursor = addDias_(fin, 1);
     setProp_('HIST_JOB', JSON.stringify(job));
   }
+  borrarTriggersJob_();
   if (job.cursor <= job.hasta) ScriptApp.newTrigger('tareaHistorialJob').timeBased().after(60 * 1000).create();
   else { setProp_('HIST_JOB', ''); setProp_('HIST_JOB_FIN', now_() + ' · ' + job.desde + ' a ' + job.hasta); console.log('Historial listo.'); }
 }
 /** Ejecutar desde el editor: llena los últimos 30 días del historial en segundo plano. */
-function historialInicial() { console.log(JSON.stringify(historialProgramar_(addDias_(hoy_(), -30), hoy_()))); }
+function historialInicial() {
+  let job = null; try { job = JSON.parse(prop_('HIST_JOB') || 'null'); } catch (e) {}
+  if (job && job.cursor) { borrarTriggersJob_(); ScriptApp.newTrigger('tareaHistorialJob').timeBased().after(30 * 1000).create(); console.log('Sigue desde ' + job.cursor); return; }
+  console.log(JSON.stringify(historialProgramar_(addDias_(hoy_(), -30), hoy_())));
+}
 function historialActualizar_(req) {
   const hasta = req.hasta || req.desde || hoy_(), desde = req.desde || hasta;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(desde) || !/^\d{4}-\d{2}-\d{2}$/.test(hasta) || hasta < desde) throw new Error('Rango de fechas inválido');
