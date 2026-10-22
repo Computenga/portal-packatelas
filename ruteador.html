@@ -739,6 +739,7 @@ async function optimize(){
   const warnings=[];
   try{
     if(!S.rows.length)throw new Error('Primero sube el Excel con los envíos.');
+    if($('date').value<hoyISO()){$('date').value=hoyISO();warnings.push('La fecha era de un día pasado; se cambió a hoy.');}
     if(!await confirmarMotos())return;
     const cfg=readCfg();
     if(!isFinite(cfg.depot.lat)||!isFinite(cfg.depot.lng))throw new Error('Revisa las coordenadas del origen.');
@@ -1198,6 +1199,7 @@ function simplificar(pts,n){if(pts.length<=n)return pts;const st=Math.ceil(pts.l
 async function publicar(){
   const R=S.result;const sched=currentSched();const asig=asignaciones();const meta=asigMeta();
   if(S.srv&&!meta.aprobada)return alert('Primero aprueba la asignación (botón “Aprobar asignación”).');
+  if(R.cfg.date<hoyISO())return alert(`Estas rutas son del ${R.cfg.date} (ya pasó). Cambia la fecha a hoy y vuelve a optimizar antes de publicar.`);
   const rutas=sched.filter(s=>asig[s.num]).map(s=>({no_empleado:asig[s.num],sugerido:(meta.sug||{})[s.num]||'',num:s.num,total:s.total,salida:hhmm(s.start),fin:hhmm(s.end),limite:hhmm(s.deadline),km:+s.km.toFixed(1),color:s.color,
     deposito:[R.cfg.depot.lat,R.cfg.depot.lng],geom:simplificar(s.geom.map(p=>[+(+p[0]).toFixed(5),+(+p[1]).toFixed(5)]),900),
     paradas:s.stops.map((o,i)=>{const x=stopInfo(o,i,s);return{orden:i+1,eta:x.eta,envios:x.ids,ref:x.nombres,dir:[x.calle,x.zona].filter(Boolean).join(', '),compromiso:x.comp,lat:o.st.lat,lng:o.st.lng,espera:x.espera,tipo:x.same?'same_day':''};})}));
@@ -1253,6 +1255,10 @@ $('keysSave').onclick=async()=>{
 
 // ===== Inicio =====
 loadSettings();bindSettings();initMap();cargarServidor();
+// Si la página se quedó abierta de un día para otro, la fecha pasa sola a hoy.
+const hoyISO=()=>{const t=new Date();return`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;};
+function fechaAlDia(){if($('date').value&&$('date').value<hoyISO()){$('date').value=hoyISO();cargarAsistencia();return true;}return false;}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)fechaAlDia();});window.addEventListener('focus',fechaAlDia);
 $('date').addEventListener('change',()=>cargarAsistencia());
 window.__ruteador={S,ticketHTML,conRepartidor,currentSched,printCfg,routeText,sugerirAsignacion,asignaciones,asigMeta};
 $('file').addEventListener('change',onFile);

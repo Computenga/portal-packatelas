@@ -2167,6 +2167,7 @@ function publicarRutas_(req, u) {
   rutasTabs_();
   const fecha = String(req.fecha || '');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) throw new Error('Fecha inválida');
+  if (fecha < hoy_()) throw new Error('La fecha de las rutas (' + fecha + ') ya pasó: cámbiala a hoy en el ruteador y vuelve a optimizar.');
   const rutas = (req.rutas || []).filter(r => r && r.no_empleado);
   if (!rutas.length) throw new Error('Asigna al menos una ruta a un repartidor');
   const nos = rutas.map(r => String(r.no_empleado));
