@@ -760,12 +760,19 @@ t('historial de entregas, jerarquía, asistencia para el ruteador y alertas de G
   };
   ctx.UrlFetchApp = { fetch: fetchOne, fetchAll: reqs => reqs.map(r => fetchOne(r.url, r)) };
   // 1) Historial desde Shipday
-  fail(call('historialActualizar', { desde: '2026-09-01', hasta: '2026-10-12' }, admin), /31 días/);
-  const h = ok(call('historialActualizar', { desde: '2026-10-01', hasta: '2026-10-12' }, admin));
-  assert.strictEqual(h.entregados, 105, JSON.stringify(h)); assert.strictEqual(h.sin_vincular, 1);
+  fail(call('historialActualizar', { desde: '2026-07-01', hasta: '2026-10-12' }, admin), /2 meses/);
+  // varios días → en segundo plano (Shipday: 5 consultas por minuto)
+  const pr = ok(call('historialActualizar', { desde: '2026-10-01', hasta: '2026-10-11' }, admin));
+  assert.strictEqual(pr.programado, true);
+  assert.strictEqual(ok(call('historialEntregas', { fecha: '2026-10-12' }, admin)).proceso.en_proceso, true);
+  run('tareaHistorialJob');
+  assert.strictEqual(ok(call('historialEntregas', { fecha: '2026-10-12' }, admin)).proceso.en_proceso, false);
+  const h = ok(call('historialActualizar', { desde: '2026-10-12', hasta: '2026-10-12' }, admin));
+  assert.strictEqual(h.entregados, 45, JSON.stringify(h)); assert.strictEqual(h.sin_vincular, 1);
   assert(calls.filter(u => /orders\/query/.test(u)).length >= 4, 'pagina de 100 en 100');
   // recalcular no duplica
   ok(call('historialActualizar', { desde: '2026-10-12', hasta: '2026-10-12' }, admin));
+  assert(calls.filter(u => /orders\/query/.test(u)).length >= 10);
   const v = ok(call('historialEntregas', { fecha: '2026-10-12' }, admin));
   const r4 = v.repartidores.find(x => x.no_empleado === '4'), r5 = v.repartidores.find(x => x.no_empleado === '5');
   assert.deepStrictEqual([r4.dia.ent, r4.dia.fal, r4.dia.pct], [30, 2, 93.8]);

@@ -1643,6 +1643,7 @@ async function recoleccionesView() {
             h('button', { class: 'btn sm', onclick: () => accion('Descartando…', () => api('recoleccionRechazar', { rec_id: r.rec_id }), () => 'Descartada') }, 'Descartar'))]); };
   fill(body,
     !d.shipday && h('div', { class: 'banner warn' }, 'Falta la key de Shipday (ruteador → Claves del servidor).'),
+    d.proceso && d.proceso.en_proceso && h('div', { class: 'banner info small' }, `⏳ Recalculando desde Shipday del ${fecha(d.proceso.desde)} al ${fecha(d.proceso.hasta)} (va en ${fecha(d.proceso.va_en)}). Vuelve a abrir en unos minutos.`),
     h('div', { class: 'banner info small' }, `Modo: ${d.modo === 'automatico' ? 'automático' : d.modo === 'apagado' ? 'apagado' : 'con aprobación'} · se buscan cada 5 min hasta las ${d.hasta} · tope ${d.capacidad} puntos por repartidor (bajo 1 · medio 2 · alto 3).`),
     h('div', { class: 'row gap8' },
       h('button', { class: 'btn grow', onclick: () => accion('Buscando en Shipday…', () => api('recoleccionesBuscar'), r => r.nuevas ? `${r.nuevas} nueva(s)` : 'No hay recolecciones nuevas') }, '🔎 Buscar ahora'),
@@ -1999,7 +2000,8 @@ async function entregasEquipoView(f, per = 'dia') {
   let d;
   try { d = (await cached('historialEntregas', { fecha: f }, live(() => entregasEquipoView(f, per)))).data; } catch (e) { return fill(body, errorBox(e, () => entregasEquipoView(f, per))); }
   const actualizar = async (desde) => {
-    try { const r = await busy('Consultando Shipday…', () => api('historialActualizar', { desde: desde || f, hasta: f })); toast(`${r.entregados} entregas en ${r.filas} registro(s)` + (r.sin_vincular ? ` · ${r.sin_vincular} sin vincular` : ''), 'ok', 5000); entregasEquipoView(f, per); }
+    try { const r = await busy(desde ? 'Programando…' : 'Consultando Shipday (≈1 min)…', () => api('historialActualizar', { desde: desde || f, hasta: f }));
+      toast(r.programado ? 'Se está recalculando en segundo plano (Shipday permite 5 consultas por minuto). Tarda unos minutos.' : `${r.entregados} entregas en ${r.filas} registro(s)` + (r.sin_vincular ? ` · ${r.sin_vincular} sin vincular` : ''), 'ok', 6000); entregasEquipoView(f, per); }
     catch (e) { toast(e.message, 'error', 6000); }
   };
   const etiqueta = { dia: fecha(f), semana: `${fecha(d.semana[0])} – ${fecha(d.semana[1])}`, mes: `${fecha(d.mes[0])} – ${fecha(d.mes[1])}` }[per];
@@ -2009,6 +2011,7 @@ async function entregasEquipoView(f, per = 'dia') {
       h('button', { class: 'btn sm', onclick: () => actualizar() }, '↻ Shipday')),
     segmented([['dia', 'Día'], ['semana', 'Semana'], ['mes', 'Mes']], per, v => entregasEquipoView(f, v)),
     !d.shipday && h('div', { class: 'banner warn' }, 'Falta la key de Shipday (ruteador → Claves del servidor).'),
+    d.proceso && d.proceso.en_proceso && h('div', { class: 'banner info small' }, `⏳ Recalculando desde Shipday del ${fecha(d.proceso.desde)} al ${fecha(d.proceso.hasta)} (va en ${fecha(d.proceso.va_en)}). Vuelve a abrir en unos minutos.`),
     h('p', { class: 'muted small' }, `${etiqueta} · lugar según los últimos ${d.jerarquia.dias} días (${Math.round(d.jerarquia.peso_exito * 100)}% éxito, ${Math.round((1 - d.jerarquia.peso_exito) * 100)}% volumen)` + (d.actualizado ? ` · actualizado ${fechaHora(d.actualizado)}` : '')),
     lista.length ? lista.map(r => { const x = r[per], j = r.jerarquia;
       return h('details', { class: 'card' },

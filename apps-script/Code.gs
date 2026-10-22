@@ -246,7 +246,7 @@ const ACTIONS = {
   emergencias:      { ops: true, fn: emergencias_ },
   guardarDatosDe:   { ops: true, fn: (req, u) => { if (!req.no_empleado) throw new Error('Falta el empleado'); return guardarDatos_(String(req.no_empleado), req, u); } },
   historialEntregas:{ ops: true, fn: (req) => historialEntregas_(req.fecha || hoy_()) },
-  historialActualizar: { ops: true, fn: (req) => historialCalcular_(req.desde || hoy_(), req.hasta || req.desde || hoy_()) },
+  historialActualizar: { ops: true, fn: historialActualizar_ },
 };
 
 // ───────────────────────── Instalación ─────────────────────────
@@ -2605,7 +2605,7 @@ function puntoRecoleccion_(o) {
 function esRecoleccion_(o) {
   const t = normTxt_(config_('RECOLECCION_TEXTO', 'recoleccion'));
   const rest = o.restaurant || {};
-  return normTxt_(o.orderNumber).indexOf(t) >= 0 || normTxt_(rest.name).indexOf(t) >= 0 || normTxt_(o.restaurantName).indexOf(t) >= 0;
+  return normTxt_(o.orderNumber).indexOf(t) >= 0 || normTxt_(rest.name).indexOf(t) >= 0 || normTxt_(o.restaurantName).indexOf(t) >= 0 || normTxt_((o.pickup || {}).name).indexOf(t) >= 0;
 }
 function creadaHoy_(o) {
   const al = o.activityLog || {};
@@ -3036,16 +3036,28 @@ function emergencias_() {
 
 function isoUtc_(d) { return d.toISOString().replace(/\.\d{3}Z$/, 'Z'); }
 
-/** Shipday POST /orders/query (por hora de creación, paginado). Devuelve las órdenes sin repetir. */
+/** Shipday limita /orders/query a 5 consultas por minuto: se espera 13 s entre consultas (también entre ejecuciones). */
+function shipdayTurno_() {
+  const ult = Number(prop_('SD_QUERY_ULT') || 0), espera = 13000 - (Date.now() - ult);
+  if (espera > 0) Utilities.sleep(Math.min(espera, 13000));
+  setProp_('SD_QUERY_ULT', String(Date.now()));
+}
+/** Shipday POST /orders/query (por hora de creación, paginado de 100 en 100). Devuelve las órdenes sin repetir. */
 function shipdayQuery_(desde, hasta, estado) {
   const key = prop_('SHIPDAY_KEY');
   if (!key) throw new Error('Falta la key de Shipday. Guárdala en el ruteador → Claves del servidor.');
   const out = [], vistos = {}, PAG = 100;
   for (let c = 1; c < 30000; c += PAG) {
-    const r = UrlFetchApp.fetch('https://api.shipday.com/orders/query', { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-      headers: { Authorization: 'Basic ' + key, Accept: 'application/json' },
-      payload: JSON.stringify({ startTime: isoUtc_(desde), endTime: isoUtc_(hasta), orderStatus: estado, startCursor: c, endCursor: c + PAG - 1 }) });
-    const code = r.getResponseCode();
+    let r, code;
+    for (let intento = 0; intento < 4; intento++) {
+      shipdayTurno_();
+      r = UrlFetchApp.fetch('https://api.shipday.com/orders/query', { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+        headers: { Authorization: 'Basic ' + key, Accept: 'application/json' },
+        payload: JSON.stringify({ startTime: isoUtc_(desde), endTime: isoUtc_(hasta), orderStatus: estado, startCursor: c, endCursor: c + PAG - 1 }) });
+      code = r.getResponseCode();
+      if (!(code === 400 || code === 429) || !/rate limit/i.test(r.getContentText())) break;
+      Utilities.sleep(20000);
+    }
     if (code === 401 || code === 403) throw new Error('Shipday rechazó la key (' + code + ')');
     if (code !== 200) throw new Error('Shipday respondió ' + code + ' al consultar el historial (' + estado + ')');
     let l = []; try { l = JSON.parse(r.getContentText()); } catch (e) {}
@@ -3053,7 +3065,6 @@ function shipdayQuery_(desde, hasta, estado) {
     let nuevos = 0;
     l.forEach(o => { const id = String(o.orderId || o.id || ''); if (id && vistos[id]) return; if (id) vistos[id] = 1; out.push(o); nuevos++; });
     if (l.length < PAG || !nuevos) break;
-    Utilities.sleep(250);
   }
   return out;
 }
@@ -3067,7 +3078,7 @@ function historialCalcular_(desde, hasta) {
   if (addDias_(desde, 31) <= hasta) throw new Error('Máximo 31 días por vez');
   if (!ss_().getSheetByName('HistorialEntregas') || SCHEMA.HistorialEntregas.some(c => headers_('HistorialEntregas').indexOf(c) < 0)) ensureTab_('HistorialEntregas', SCHEMA.HistorialEntregas);
   const ini = new Date(desde + 'T00:00:00-06:00'), fin = new Date(hasta + 'T23:59:59-06:00');
-  const qIni = new Date(ini.getTime() - 3 * 86400000), qFin = new Date(Math.min(fin.getTime(), Date.now() + 60000));
+  const qIni = new Date(ini.getTime() - 2 * 86400000), qFin = new Date(Math.min(fin.getTime(), Date.now() + 60000));
   const per = rows_('Personal');
   const agg = {}, vistos = {};
   let leidas = 0;
@@ -3113,18 +3124,42 @@ function historialCalcular_(desde, hasta) {
     entregados: nuevas.reduce((s, r) => s + r.entregados, 0), sin_vincular: nuevas.filter(r => !r.no_empleado).length };
 }
 
-/** Ejecutar desde el editor: llena los últimos 30 días del historial en tramos de 5 días (si se acaba el tiempo, vuelve a ejecutarla y sigue). */
-function historialInicial() {
-  const t0 = Date.now(), hoy = hoy_();
-  let desde = prop_('HIST_INICIAL_DESDE') || addDias_(hoy, -30);
-  while (desde <= hoy && Date.now() - t0 < 4.5 * 60000) {
-    const hasta = addDias_(desde, 4) < hoy ? addDias_(desde, 4) : hoy;
-    const r = historialCalcular_(desde, hasta);
-    console.log(desde + ' → ' + hasta + ': ' + r.entregados + ' entregas, ' + r.filas + ' filas, ' + r.ordenes + ' órdenes leídas, ' + r.sin_vincular + ' sin vincular');
-    desde = addDias_(hasta, 1);
-    setProp_('HIST_INICIAL_DESDE', desde);
+/**
+ * Recalcular varios días toma tiempo (Shipday permite 5 consultas por minuto): se hace en segundo plano en tramos
+ * de 3 días; cada ejecución avanza lo que alcanza en ~4.5 min y se vuelve a programar sola hasta terminar.
+ */
+function historialProgramar_(desde, hasta) {
+  setProp_('HIST_JOB', JSON.stringify({ desde: desde, hasta: hasta, cursor: desde, inicio: now_() }));
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction && t.getHandlerFunction() === 'tareaHistorialJob').forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('tareaHistorialJob').timeBased().after(30 * 1000).create();
+  return { programado: true, desde: desde, hasta: hasta };
+}
+function tareaHistorialJob() {
+  let job = {}; try { job = JSON.parse(prop_('HIST_JOB') || '{}'); } catch (e) {}
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction && t.getHandlerFunction() === 'tareaHistorialJob').forEach(t => ScriptApp.deleteTrigger(t));
+  if (!job.cursor) return;
+  const t0 = Date.now();
+  while (job.cursor <= job.hasta && Date.now() - t0 < 4 * 60000) {
+    const fin = addDias_(job.cursor, 2) < job.hasta ? addDias_(job.cursor, 2) : job.hasta;
+    const r = historialCalcular_(job.cursor, fin);
+    console.log(job.cursor + ' → ' + fin + ': ' + r.entregados + ' entregas, ' + r.ordenes + ' órdenes, ' + r.sin_vincular + ' sin vincular');
+    job.cursor = addDias_(fin, 1);
+    setProp_('HIST_JOB', JSON.stringify(job));
   }
-  if (desde > hoy) { setProp_('HIST_INICIAL_DESDE', ''); console.log('Historial completo.'); } else console.log('Falta desde ' + desde + ': vuelve a ejecutar historialInicial.');
+  if (job.cursor <= job.hasta) ScriptApp.newTrigger('tareaHistorialJob').timeBased().after(60 * 1000).create();
+  else { setProp_('HIST_JOB', ''); setProp_('HIST_JOB_FIN', now_() + ' · ' + job.desde + ' a ' + job.hasta); console.log('Historial listo.'); }
+}
+/** Ejecutar desde el editor: llena los últimos 30 días del historial en segundo plano. */
+function historialInicial() { console.log(JSON.stringify(historialProgramar_(addDias_(hoy_(), -30), hoy_()))); }
+function historialActualizar_(req) {
+  const hasta = req.hasta || req.desde || hoy_(), desde = req.desde || hasta;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(desde) || !/^\d{4}-\d{2}-\d{2}$/.test(hasta) || hasta < desde) throw new Error('Rango de fechas inválido');
+  if (addDias_(desde, 62) <= hasta) throw new Error('Máximo 2 meses por vez');
+  return addDias_(desde, 1) < hasta ? historialProgramar_(desde, hasta) : historialCalcular_(desde, hasta);
+}
+function historialEstado_() {
+  let job = null; try { job = JSON.parse(prop_('HIST_JOB') || 'null'); } catch (e) {}
+  return job && job.cursor ? { en_proceso: true, desde: job.desde, hasta: job.hasta, va_en: job.cursor } : { en_proceso: false, ultimo: prop_('HIST_JOB_FIN') };
 }
 
 /** Cada hora (desde tareaReporteRutas): a las 23 h guarda ayer y hoy; en la mañana vuelve a cerrar ayer (entregas tardías). */
@@ -3190,7 +3225,7 @@ function historialEntregas_(fecha) {
   }).sort((a, b) => ((a.jerarquia ? a.jerarquia.rank : 999) - (b.jerarquia ? b.jerarquia.rank : 999)) || String(a.nombre).localeCompare(String(b.nombre)));
   const act = filas.map(r => r.act).filter(String).sort().pop() || '';
   return { fecha: fecha, semana: sem, mes: mes, jerarquia: { dias: jer.dias, desde: jer.desde, hasta: jer.hasta, peso_exito: jer.peso_exito }, actualizado: act,
-    shipday: !!prop_('SHIPDAY_KEY'), repartidores: lista };
+    shipday: !!prop_('SHIPDAY_KEY'), proceso: historialEstado_(), repartidores: lista };
 }
 
 /** Lo que ve el repartidor de sí mismo. */

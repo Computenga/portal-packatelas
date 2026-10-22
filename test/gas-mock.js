@@ -108,7 +108,7 @@ function makeEnv({ now, maestro, flotilla, gmail }) {
       getFileById: (id) => ({ getBlob: () => files[id] || blob('x'), getMimeType: () => (files[id] || {}).mime || 'image/jpeg', moveTo: (f) => { (files[id] || {}).folder = f.name; } }) },
     GmailApp: { search: () => gmail.map(t => ({ getMessages: () => t.map(m => ({ getId: () => m.id, getSubject: () => m.subject, getPlainBody: () => m.body, getDate: () => new RealDate(m.date) })) })) },
     UrlFetchApp: { fetch: (url, o) => { pushes.push(JSON.parse(o.payload).message); return { getResponseCode: () => 200, getContentText: () => '{}' }; } },
-    ScriptApp: { getOAuthToken: () => 'tok', getProjectTriggers: () => [], deleteTrigger() {}, newTrigger: () => { const b = { timeBased: () => b, everyMinutes: () => b, everyHours: () => b, create: () => b }; return b; } },
+    ScriptApp: { getOAuthToken: () => 'tok', getProjectTriggers: () => [], deleteTrigger() {}, newTrigger: () => { const b = { timeBased: () => b, everyMinutes: () => b, everyHours: () => b, after: () => b, create: () => b }; return b; } },
     MailApp: { sendEmail: (to, s, b) => mails.push({ to, s, b }) },
     ContentService: { createTextOutput: (t) => ({ setMimeType() { return t; } }), MimeType: { JSON: 'json' } },
   };
