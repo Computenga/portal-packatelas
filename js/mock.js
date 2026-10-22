@@ -193,6 +193,8 @@ function bienv(p) {
   if (rol === 'repartidor') pasos.push({ id: 'apps', titulo: 'Instala tus apps e inicia sesión', detalle: `${req.filter(a => a.lista).length} de ${req.length} listas`, hecho: req.every(a => a.lista), faltan: req.filter(a => !a.lista).map(a => a.nombre) });
   pasos.push({ id: 'checador', titulo: 'Registra tu huella en el checador', detalle: 'Con RH, en el checador de la base', hecho: !!o.celular, auto: true });
   pasos.push({ id: 'notificaciones', titulo: 'Activa las notificaciones', detalle: 'Para tu recibo y tu depósito', hecho: dispositivos.has(p.no_empleado), auto: true });
+  const dc = datosDe(p).completos;
+  pasos.push({ id: 'datos', titulo: 'Tu domicilio y 2 contactos de emergencia', detalle: [dc.domicilio ? 'Domicilio ✓' : 'Falta tu domicilio', dc.contactos ? 'contactos ✓' : 'faltan contactos'].join(' · '), hecho: dc.domicilio && dc.contactos });
   const hechos = pasos.filter(x => x.hecho).length;
   return { rol, pasos, hechos, total: pasos.length, completa: hechos === pasos.length, siguiente: (pasos.find(x => !x.hecho) || {}).titulo || '' };
 }
@@ -203,6 +205,28 @@ altas.push({ alta_id: 'ALTA-0001', nombre: 'Juan Pérez Gómez', rfc: 'PEGJ90010
 TIPOS.forEach(t => subir('A:ALTA-0001', t[0], 'image/jpeg'));
 altas.push({ alta_id: 'ALTA-0002', nombre: 'Laura Méndez Ruiz', rfc: 'MERL950505MX2', telefono: '5598765432', rol: 'otro', estatus: 'pendiente', fecha: ahora(), no_empleado: '', notas: '' });
 ['ine_frente', 'curp'].forEach(d => subir('A:ALTA-0002', d, 'image/jpeg'));
+// Domicilio, contactos, moto y entregas (demo)
+const DATOS = {
+  '4': { moto_tipo: 'grande', domicilio: { texto: 'Calle Norte 54 3831, Col. Gertrudis Sánchez, Gustavo A. Madero, Ciudad de México, CP 07839', calle: 'Calle Norte 54 3831', colonia: 'Gertrudis Sánchez', cp: '07839', municipio: 'Gustavo A. Madero', estado: 'Ciudad de México', referencias: 'Portón negro', lat: 19.4601, lng: -99.1162, dist_m: 40, fecha: hoy },
+    contactos: [{ nombre: 'María López Hernández', telefono: '5512340001', parentesco: 'Mamá' }, { nombre: 'Pedro Argenis López', telefono: '5512340002', parentesco: 'Hermano' }] },
+  '92': { moto_tipo: 'chica', domicilio: { texto: 'Av. Central 120, Col. Valle de Aragón, Nezahualcóyotl, Estado de México, CP 57100', calle: 'Av. Central 120', colonia: 'Valle de Aragón', cp: '57100', municipio: 'Nezahualcóyotl', estado: 'Estado de México', referencias: '', lat: 19.4801, lng: -99.0482, dist_m: 120, fecha: hoy }, contactos: [{}, {}] },
+  '52': { moto_tipo: 'chica', domicilio: { texto: 'Calle 3 45, Col. Agrícola Oriental, Iztacalco, Ciudad de México, CP 08500', calle: 'Calle 3 45', colonia: 'Agrícola Oriental', cp: '08500', municipio: 'Iztacalco', estado: 'Ciudad de México', lat: 19.3962, lng: -99.0712, dist_m: 30, fecha: hoy }, contactos: [{ nombre: 'Ana Mendoza Ruiz', telefono: '5598760001', parentesco: 'Esposa' }, { nombre: 'Luis Mendoza', telefono: '5598760002', parentesco: 'Papá' }] },
+  '75': { moto_tipo: '', domicilio: { texto: 'Av. López Mateos 300, Col. Centro, Naucalpan, Estado de México, CP 53000', lat: 19.4785, lng: -99.2390, calle: 'Av. López Mateos 300', colonia: 'Centro', cp: '53000', municipio: 'Naucalpan', estado: 'Estado de México', fecha: hoy }, contactos: [{ nombre: 'Rosa Saucedo', telefono: '5587650001', parentesco: 'Mamá' }, { nombre: 'Iván Saucedo', telefono: '5587650002', parentesco: 'Hermano' }] },
+};
+const datosDe = p => { const x = DATOS[p.no_empleado] = DATOS[p.no_empleado] || { moto_tipo: '', domicilio: {}, contactos: [{}, {}] };
+  const c = [0, 1].map(i => Object.assign({ nombre: '', telefono: '', parentesco: '' }, x.contactos[i] || {}));
+  return { moto_tipo: x.moto_tipo, domicilio: Object.assign({ texto: '', lat: null, lng: null }, x.domicilio), contactos: c,
+    completos: { domicilio: !!(x.domicilio.texto && x.domicilio.lat != null), contactos: c.every(k => k.nombre && k.telefono && k.parentesco) } }; };
+const ENT = { '4': [34, 2, 0.95], '52': [41, 1, 0.98], '75': [22, 4, 0.85], '92': [28, 3, 0.9] };
+function histDe(no, dias = 30) { const b = ENT[no]; if (!b) return []; const out = [];
+  for (let k = dias - 1; k >= 0; k--) { const d = new Date(HOY); d.setDate(d.getDate() - k); if (d.getDay() === 0) continue; const r = hash(no + iso(d)) % 9;
+    out.push({ fecha: iso(d), ent: Math.max(0, b[0] - 4 + r), fal: (hash(iso(d) + no) % 10) < (1 - b[2]) * 30 ? b[1] : 0 }); } return out; }
+const suma = l => { const e = l.reduce((s, r) => s + r.ent, 0), f = l.reduce((s, r) => s + r.fal, 0); return { ent: e, fal: f, total: e + f, pct: e + f ? Math.round(e / (e + f) * 1000) / 10 : null, dias: l.length, prom_dia: l.length ? Math.round(e / l.length * 10) / 10 : 0 }; };
+function jerarq() { const l = Object.keys(ENT).map(no => { const s = suma(histDe(no)); return { no_empleado: no, entregados: s.ent, fallidos: s.fal, pct: s.pct, dias: s.dias, score: Math.round((0.6 * s.ent / s.total + 0.4 * s.ent / 1100) * 1000) / 10 }; }).sort((a, b) => b.score - a.score); l.forEach((x, i) => x.rank = i + 1); return l; }
+function periodos(f) { const d = new Date(f + 'T12:00'); const l = new Date(d); l.setDate(d.getDate() - (d.getDay() + 6) % 7); const dm = new Date(l); dm.setDate(l.getDate() + 6);
+  return { sem: [iso(l), iso(dm)], mes: [f.slice(0, 8) + '01', iso(new Date(d.getFullYear(), d.getMonth() + 1, 0))] }; }
+function desemp(no, f) { f = f || hoy; const h = histDe(no, 45), P = periodos(f), en = (a, b) => suma(h.filter(r => r.fecha >= a && r.fecha <= b)); const j = jerarq(); const y = j.find(x => x.no_empleado === no);
+  return { fecha: f, dia: en(f, f), semana: en(...P.sem), mes: en(...P.mes), jerarquia: y ? { rank: y.rank, de: j.length, score: y.score, pct: y.pct, entregados: y.entregados } : null, dias_jerarquia: 30, serie: h.slice(-12) }; }
 const sessions = {};
 function me(token) { const no = sessions[token] || (token && token.startsWith('demo-') ? token.slice(5) : null); const p = personal.find(x => x.no_empleado === no); if (!p) throw new Error('Sesión requerida'); return p; }
 const user = p => ({ no_empleado: p.no_empleado, nombre: p.nombre, rol: p.rol, puesto: p.puesto, repartidor: esRep(p) });
@@ -223,13 +247,14 @@ export function handle(action, d, token) {
         saldo_adeudos: adeudos.filter(x => x.no_empleado === p.no_empleado && x.estatus === 'activo').reduce((s, x) => s + x.saldo, 0),
         cargos_pendientes: p.flotilla_id ? cargos.filter(c => c.responsable_id === p.flotilla_id && !c.cobrado).reduce((s, c) => s + c.monto, 0) : 0,
         solicitudes_pendientes: solicitudes.filter(s => s.no_empleado === p.no_empleado && s.estatus === 'pendiente').length,
-        repartidor: esRep(p), bienvenida: bienv(p), accesos: appsPara(p).filter(a => a.acceso_directo),
+        repartidor: esRep(p), bienvenida: bienv(p), datos_pendientes: (c => !c.domicilio || !c.contactos)(datosDe(p).completos),
+        desempeno: esRep(p) ? (x => ({ dia: x.dia, semana: x.semana, jerarquia: x.jerarquia }))(desemp(p.no_empleado)) : null, accesos: appsPara(p).filter(a => a.acceso_directo),
         ruta: esRep(p) ? { ruta_id: 'RT-000001', fecha: hoy, paradas: RUTA_DEMO.paradas.length, envios: 7, salida: '10:00', fin: '13:05' } : null,
         flotilla: esRep(p) ? { rol: 'repartidor', check: { vehiculo_id: 'M-04', hora: '09:12' }, carga: null, mis_fallas: 1, fallas_pendientes: null }
           : p.rol === 'patron' ? { rol: 'admin', check: null, carga: null, mis_fallas: 0, fallas_pendientes: 3 } : null };
     }
     case 'perfil': { const p = me(token); const ing = p.ingreso || ''; const anios = ing ? Math.floor((HOY - new Date(ing)) / 3.156e10) : 0;
-      return { ...p, fecha_ingreso: ing, antiguedad: ing ? `${anios} año(s)` : '', clabe: p.clabe ? '•••• ' + p.clabe.slice(-4) : '', banco: p.clabe ? 'BBVA' : '', horario: { entrada: p.entrada, dias: p.dias, comida: p.entrada ? 60 : '' }, celular_checador: true,
+      return { ...p, ...datosDe(p), fecha_ingreso: ing, antiguedad: ing ? `${anios} año(s)` : '', clabe: p.clabe ? '•••• ' + p.clabe.slice(-4) : '', banco: p.clabe ? 'BBVA' : '', horario: { entrada: p.entrada, dias: p.dias, comida: p.entrada ? 60 : '' }, celular_checador: true,
         vacaciones: ing ? { anios, derecho: anios ? 10 + Math.min(anios, 5) * 2 : 0, tomados: 2, disponibles: anios ? 10 + Math.min(anios, 5) * 2 - 2 : 0, desde: ing.replace(/^\d{4}/, HOY.getFullYear() - (iso(HOY).slice(5) < ing.slice(5) ? 1 : 0)), proximo_aniversario: ing.replace(/^\d{4}/, HOY.getFullYear() + (iso(HOY).slice(5) < ing.slice(5) ? 0 : 1)), dias_proximo: 12 + Math.min(anios, 4) * 2 } : { sin_fecha: true } }; }
     case 'asistencia': return asistencia(me(token).no_empleado, d.periodo);
     case 'asistenciaDe': ADMIN(); return asistencia(d.no_empleado, d.periodo);
@@ -310,8 +335,8 @@ export function handle(action, d, token) {
     case 'pagoManual': ADMIN(); { const p = personal.find(x => x.no_empleado === d.no_empleado); pagos.unshift({ pago_id: 'PAG-' + (++seq), fecha: ahora(), no_empleado: p.no_empleado, nombre: p.nombre, monto: Number(d.monto), concepto: d.concepto, clave_rastreo: 'MANUAL', recibo_id: '', cuadra: 'SIN RECIBO', origen: 'manual' }); return 'ok'; }
     case 'revisarAhora': ADMIN(); return { revisados: 37, pagos_nuevos: 0, transferencias_a_otros: 31 };
     case 'siguienteNumero': ADMIN(); return String(Math.max(...personal.map(p => Number(p.no_empleado))) + 1);
-    case 'personal': ADMIN(); return personal.map(p => ({ ...p, hora_entrada: p.hora_entrada ?? p.entrada, dias_laborales: p.dias_laborales ?? p.dias, minutos_comida: p.minutos_comida ?? (p.entrada ? 60 : ''), checadas: p.checadas ?? (esRep(p) ? 'ENTRADA,SALIDA_COMIDA,REGRESO_COMIDA' : 'ENTRADA,SALIDA_COMIDA,REGRESO_COMIDA,SALIDA'), docs_por_revisar: archivos.filter(x => x.owner === 'E:' + p.no_empleado && x.estatus === 'subido').length, bienvenida: (b => ({ hechos: b.hechos, total: b.total, completa: b.completa }))(bienv(p)), estatus: 'activo', tiene_pin: !!p.pin, bloqueado: false, push: dispositivos.has(p.no_empleado), horario: p.entrada ? { entrada: p.entrada, dias: p.dias, comida: 60 } : null, celular_checador: true, fecha_ingreso: p.ingreso || '' }));
-    case 'guardarPersona': ADMIN(); { const x = personal.find(p => p.no_empleado === d.persona.no_empleado); if (x) Object.assign(x, d.persona, { salario_diario: Number(d.persona.salario_diario || 0), entrada: d.persona.hora_entrada, dias: d.persona.dias_laborales }); else personal.push({ ...d.persona, entrada: '', dias: '' }); return true; }
+    case 'personal': ADMIN(); return personal.map(p => ({ ...p, ...datosDe(p), hora_entrada: p.hora_entrada ?? p.entrada, dias_laborales: p.dias_laborales ?? p.dias, minutos_comida: p.minutos_comida ?? (p.entrada ? 60 : ''), checadas: p.checadas ?? (esRep(p) ? 'ENTRADA,SALIDA_COMIDA,REGRESO_COMIDA' : 'ENTRADA,SALIDA_COMIDA,REGRESO_COMIDA,SALIDA'), docs_por_revisar: archivos.filter(x => x.owner === 'E:' + p.no_empleado && x.estatus === 'subido').length, bienvenida: (b => ({ hechos: b.hechos, total: b.total, completa: b.completa }))(bienv(p)), estatus: 'activo', tiene_pin: !!p.pin, bloqueado: false, push: dispositivos.has(p.no_empleado), horario: p.entrada ? { entrada: p.entrada, dias: p.dias, comida: 60 } : null, celular_checador: true, fecha_ingreso: p.ingreso || '' }));
+    case 'guardarPersona': ADMIN(); { if (d.persona.moto_tipo !== undefined) datosDe(d.persona); if (d.persona.moto_tipo !== undefined) DATOS[d.persona.no_empleado].moto_tipo = d.persona.moto_tipo; const x = personal.find(p => p.no_empleado === d.persona.no_empleado); if (x) Object.assign(x, d.persona, { salario_diario: Number(d.persona.salario_diario || 0), entrada: d.persona.hora_entrada, dias: d.persona.dias_laborales }); else personal.push({ ...d.persona, entrada: '', dias: '' }); return true; }
     case 'resetPin': ADMIN(); personal.find(p => p.no_empleado === d.no_empleado).pin = ''; return true;
     case 'subirDocumento': ADMIN(); return { id: 'x' };
     case 'adeudosAdmin': ADMIN(); return { adeudos, cargos: cargos.map(c => ({ ...c, nombre: personal.find(p => p.flotilla_id === c.responsable_id)?.nombre || c.responsable_id })) };
@@ -323,7 +348,27 @@ export function handle(action, d, token) {
     case 'enviarAviso': ADMIN(); { const dest = d.destinatarios === 'todos' ? personal.map(p => p.no_empleado) : d.destinatarios; dest.forEach(no => notificar(no, 'aviso', '📢 ' + d.titulo, d.mensaje, 'AV')); return { enviados: dest.length, con_push: dest.filter(x => dispositivos.has(x)).length }; }
     case 'avisosEnviados': ADMIN(); return [{ ref: 'AV-00001', fecha: periodo(ANT).hasta + ' 09:00', titulo: '📢 Junta el sábado', mensaje: 'Junta general a las 8:30 en la base.', total: 7, leidos: 4 }];
     case 'miRuta': { const p = me(token); return esRep(p) ? { ...RUTA_DEMO, nombre: p.nombre } : null; }
-    case 'rutasConfig': OPS(); return { tomtom: false, shipday: true, empleados: personal.map(p => ({ no_empleado: p.no_empleado, nombre: p.nombre, telefono: '5512345678', repartidor: esRep(p) })).sort((a, b) => b.repartidor - a.repartidor) };
+    case 'rutasConfig': OPS(); { const j = jerarq(); const f = d.fecha || hoy;
+      const asis = { '4': { estado: 'presente', entrada: '9:02' }, '52': { estado: 'presente', entrada: '9:48' }, '75': { estado: 'presente', entrada: '9:55' }, '92': { estado: 'sin_checar' } };
+      return { tomtom: false, shipday: true, fecha: f, hoy, jerarquia_dias: 30, empleados: personal.map(p => { const x = datosDe(p), r = j.find(y => y.no_empleado === p.no_empleado);
+        return { no_empleado: p.no_empleado, nombre: p.nombre, telefono: '5512345678', repartidor: esRep(p), moto_tipo: x.moto_tipo, casa: x.domicilio.lat != null ? [x.domicilio.lat, x.domicilio.lng] : null,
+          colonia: x.domicilio.colonia ? x.domicilio.colonia + ', ' + x.domicilio.municipio : '', shipday: true,
+          asistencia: f > hoy ? { estado: 'programado' } : (asis[p.no_empleado] || { estado: p.entrada ? 'sin_checar' : 'descanso' }), rango: r ? { rank: r.rank, de: j.length, score: r.score, pct: r.pct, entregados: r.entregados, dias: r.dias } : null }; })
+        .sort((a, b) => b.repartidor - a.repartidor) }; }
+    case 'guardarMisDatos': case 'guardarDatosDe': { const u = action === 'guardarDatosDe' ? OPS() : me(token); const p = action === 'guardarDatosDe' ? personal.find(x => x.no_empleado === d.no_empleado) : u; datosDe(p);
+      if (d.domicilio) { const x = d.domicilio; if (!/\d/.test(x.calle) && !/s\/?n/i.test(x.calle)) throw new Error('Falta el número exterior (si no tiene, escribe S/N o manzana y lote)'); if (!/^\d{5}$/.test(x.cp)) throw new Error('El código postal debe tener 5 dígitos'); if (!x.lat) throw new Error('Coloca el pin de tu casa en el mapa');
+        DATOS[p.no_empleado].domicilio = { ...x, texto: `${x.calle}, Col. ${x.colonia}, ${x.municipio}, ${x.estado}, CP ${x.cp}`, fecha: hoy }; }
+      if (d.contactos) { if (d.contactos[0].telefono === d.contactos[1].telefono) throw new Error('Los dos contactos tienen el mismo teléfono; pon a dos personas distintas'); DATOS[p.no_empleado].contactos = d.contactos.map(c => ({ ...c, telefono: c.telefono.replace(/\D/g, '').slice(-10) })); }
+      return handle('perfil', {}, 'demo-' + p.no_empleado); }
+    case 'emergencias': OPS(); return personal.map(p => { const x = datosDe(p); return { no_empleado: p.no_empleado, nombre: p.nombre, puesto: p.puesto, telefono: '5512345678', contactos: x.contactos, domicilio: x.domicilio }; });
+    case 'desempeno': return desemp(me(token).no_empleado, d.fecha);
+    case 'historialEntregas': OPS(); { const f = d.fecha || hoy, P = periodos(f), j = jerarq();
+      return { fecha: f, semana: P.sem, mes: P.mes, jerarquia: { dias: 30, peso_exito: 0.6 }, actualizado: hoy + ' 23:00', shipday: true,
+        repartidores: personal.filter(esRep).map(p => { const h = histDe(p.no_empleado, 45), en = (a, b) => suma(h.filter(r => r.fecha >= a && r.fecha <= b));
+          return { no_empleado: p.no_empleado, nombre: p.nombre, vinculado: true, carrier_ids: '', dia: en(f, f), semana: en(...P.sem), mes: en(...P.mes), jerarquia: j.find(x => x.no_empleado === p.no_empleado) || null, serie: h.slice(-12) }; })
+          .concat([{ no_empleado: '', nombre: 'Angel Campos', vinculado: false, carrier_ids: '561122', dia: suma([{ ent: 6, fal: 0 }]), semana: suma([{ ent: 6, fal: 0 }]), mes: suma([{ ent: 6, fal: 0 }]), jerarquia: null, serie: [] }])
+          .sort((a, b) => (a.jerarquia ? a.jerarquia.rank : 99) - (b.jerarquia ? b.jerarquia.rank : 99)) }; }
+    case 'historialActualizar': OPS(); return { filas: 5, entregados: 131, sin_vincular: 1, ordenes: 140 };
     case 'guardarClaves': ADMIN(); throw new Error('En la demostración no se guardan claves.');
     case 'tomtomRutas': OPS(); throw new Error('En la demostración no hay TomTom.');
     case 'publicarRutas': OPS(); return { publicadas: (d.rutas || []).filter(r => r.no_empleado).length, con_push: 1 };
@@ -340,7 +385,7 @@ export function handle(action, d, token) {
     case 'recoleccionesBuscar': OPS(); return { nuevas: 0 };
     case 'recoleccionAprobar': OPS(); return { asignadas: 2, errores: [] };
     case 'recoleccionCambiar': case 'recoleccionRechazar': case 'clienteVolumen': OPS(); return true;
-    case 'gpsPrueba': ADMIN(); return { fecha: d.fecha, activo: true, repartidores: [{ carrier_id: '300001', nombre: 'Saidd Lopez', empleado: 'Saidd Argenis López', muestras: 96, con_gps: 94, en_turno: 90, cambios: 71, pct_cambio: 76, max_congelado_min: 20, primera: '09:00', ultima: '17:00', paradas: [{ desde: '12:10', hasta: '12:35', min: 25, lat: 19.36, lng: -99.08, tipo: 'detenido' }, { desde: '14:00', hasta: '14:50', min: 50, lat: 19.40, lng: -99.10, tipo: 'sin_senal' }] }] };
+    case 'gpsPrueba': ADMIN(); return { fecha: d.fecha, activo: true, modo: 'produccion', alertas: [{ ruta_id: 'RT-000001', num: 1, nombre: 'Saidd Argenis López', fuera: false, desde: '', dist_m: 120, revisado: '12:35', pos: [19.46, -99.12], sin_entregar_h: 0 }, { ruta_id: 'RT-000002', num: 2, nombre: 'Jonatan Ortega', fuera: true, desde: '12:20', dist_m: 2400, revisado: '12:35', pos: [19.39, -99.02], sin_entregar_h: 1, ina_hora: '12:30' }], repartidores: [{ carrier_id: '300001', nombre: 'Saidd Lopez', empleado: 'Saidd Argenis López', muestras: 96, con_gps: 94, en_turno: 90, cambios: 71, pct_cambio: 76, max_congelado_min: 20, primera: '09:00', ultima: '17:00', paradas: [{ desde: '12:10', hasta: '12:35', min: 25, lat: 19.36, lng: -99.08, tipo: 'detenido' }, { desde: '14:00', hasta: '14:50', min: 50, lat: 19.40, lng: -99.10, tipo: 'sin_senal' }] }] };
     case 'gpsAhora': ADMIN(); return { muestras: 7 };
     case 'seguimientoAhora': OPS(); return { rutas: 2, consultados: 8, avisos: 1 };
     case 'seguimientoRuta': OPS(); return { ruta_id: d.ruta_id, nombre: 'Jonatan Ortega', num: 2, seguimiento: { total: 7, entregados: 1, fallidos: 0, pendientes: 6, limite: '13:30', fin_estimado: '14:15', estado: 'tarde', retraso_min: 45, actualizado: '12:10' },

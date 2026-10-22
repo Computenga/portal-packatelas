@@ -34,11 +34,12 @@ const hav = (a, b) => { const R = 6371000, t = Math.PI / 180; const x = Math.sin
     const req = JSON.parse(route.request().postData());
     calls.push(req.action);
     let data;
-    if (req.action === 'rutasConfig') data = { tomtom: true, shipday: false, empleados: [
-      { no_empleado: '4', nombre: 'Saidd Argenis López', telefono: '5511112222', repartidor: true },
-      { no_empleado: '92', nombre: 'Jonatan Ortega', telefono: '5533334444', repartidor: true },
-      { no_empleado: '75', nombre: 'Michell Saucedo', telefono: '', repartidor: true },
-      { no_empleado: '5', nombre: 'Casandra Ruiz', telefono: '', repartidor: false }] };
+    if (req.action === 'rutasConfig') data = { tomtom: true, shipday: false, fecha: req.fecha, hoy: req.fecha, jerarquia_dias: 30, empleados: [
+      { no_empleado: '4', nombre: 'Saidd Argenis López', telefono: '5511112222', repartidor: true, moto_tipo: 'grande', casa: [19.60, -99.10], asistencia: { estado: 'presente', entrada: '9:02' }, rango: { rank: 2, de: 4, pct: 96, score: 80 } },
+      { no_empleado: '92', nombre: 'Jonatan Ortega', telefono: '5533334444', repartidor: true, moto_tipo: 'chica', casa: [19.40, -99.15], asistencia: { estado: 'presente', entrada: '9:10' }, rango: { rank: 1, de: 4, pct: 99, score: 95 } },
+      { no_empleado: '75', nombre: 'Michell Saucedo', telefono: '', repartidor: true, moto_tipo: '', casa: [19.48, -99.24], asistencia: { estado: 'presente', entrada: '9:30' }, rango: { rank: 3, de: 4, pct: 90, score: 60 } },
+      { no_empleado: '52', nombre: 'Diego Mendoza', telefono: '', repartidor: true, moto_tipo: '', casa: null, asistencia: { estado: 'sin_checar' }, rango: null },
+      { no_empleado: '5', nombre: 'Casandra Ruiz', telefono: '', repartidor: false, asistencia: { estado: 'presente', entrada: '8:50' } }] };
     else if (req.action === 'tomtomRutas') data = { rutas: req.rutas.map(r => ({ legs: r.locs.slice(1).map((pt, i) => { const d = hav([r.locs[i][1], r.locs[i][0]], [pt[1], pt[0]]) * 1.35; return { sec: d / (22 / 3.6), m: d, pts: [r.locs[i], pt] }; }) })) };
     else if (req.action === 'alcanceMotoChica') data = { consultas: req.puntos.length * 2, puntos: req.puntos.map(pt => pt[1] < -99.22 ? { ok: false, motivo: 'solo_por_autopista', min_normal: 30, min_sin: 60 } : { ok: true }) };
     else if (req.action === 'publicarRutas') { fs.writeFileSync(OUT + '/publicar.json', JSON.stringify(req, null, 1)); data = { publicadas: req.rutas.length, con_push: req.rutas.length }; }
@@ -55,19 +56,30 @@ const hav = (a, b) => { const R = 6371000, t = Math.PI / 180; const x = Math.sin
   await p.fill('#small', '3'); await p.dispatchEvent('#small', 'change');
   await p.fill('#tStart', '15:00'); await p.fill('#tEnd', '21:00');
   await p.click('#run');
+  await p.waitForSelector('#dlg', { timeout: 20000 });
+  await p.screenshot({ path: OUT + '/t00-aviso-motos.png', fullPage: false });
+  const txt = await p.locator('#dlg').innerText(); console.log('aviso:', txt.replace(/\s+/g, ' ').slice(0, 220));
+  await p.click('#dlg button:has-text("Generar")');
   await p.waitForSelector('select[data-emp]', { timeout: 120000 });
-  const sels = await p.locator('select[data-emp]').count();
-  const emps = ['4', '92', '75', '5'];
-  for (let i = 0; i < sels; i++) await p.locator('select[data-emp]').nth(i).selectOption(emps[i % emps.length]);
   await p.waitForTimeout(500);
+  const asig = await p.evaluate(() => { const R = window.__ruteador; const sc = R.currentSched(); const a = R.asignaciones();
+    return { rutas: sc.map(s => ({ num: s.num, chica: s.chica, no: a[s.num] || '' })), meta: R.asigMeta().aprobada, pubDisabled: document.getElementById('pubBtn').disabled }; });
+  console.log('asignación sugerida:', JSON.stringify(asig));
+  if (asig.meta || !asig.pubDisabled) throw new Error('debía pedir aprobación');
+  if (!asig.rutas.some(r => r.no === '92' && r.chica)) throw new Error('la moto chica debía tomar una ruta chica');
+  if (asig.rutas.some(r => r.no === '92' && !r.chica)) throw new Error('moto chica en ruta grande');
   await p.screenshot({ path: OUT + '/t01-ruteador.png', fullPage: false });
   const info = await p.evaluate(() => { const R = window.__ruteador; const sc = R.currentSched(); const bad = new Set(R.S.result.restrList.map(x => x.st));
     return { chicas: sc.filter(r => r.chica).length, restr: bad.size, viol: sc.filter(r => r.chica).reduce((a, r) => a + r.stops.filter(o => bad.has(o.st)).length, 0), rutas: sc.length,
       chicasFueraCDMX: sc.filter(r => r.chica).reduce((a, r) => a + r.stops.filter(o => o.st.estado !== 'CDMX').length, 0),
       mezcladas: sc.filter(r => new Set(r.stops.map(o => o.st.estado)).size > 1).length, zonas: sc.map(r => (r.chica ? 'C ' : 'G ') + r.zona + ' ' + Math.round(r.durMin) + 'min') }; });
   console.log('motos chicas:', JSON.stringify(info));
+  await p.click('#aprobarBtn'); await p.waitForTimeout(300);
+  await p.screenshot({ path: OUT + '/t01b-aprobada.png', fullPage: false });
   await p.click('#pubBtn');
   await p.waitForTimeout(1500);
+  const pub = JSON.parse(fs.readFileSync(OUT + '/publicar.json', 'utf8'));
+  console.log('publicadas:', pub.rutas.map(r => r.num + '→' + r.no_empleado + (r.sugerido ? ' (sug ' + r.sugerido + ')' : '')).join(', '));
   // ticket impreso (80 mm ≈ 302 px)
   const html = await p.evaluate(() => { const R = window.__ruteador; const s = R.currentSched()[0]; return `<style>body{width:72mm;margin-left:4mm;font-family:Arial;font-size:10.9pt;line-height:1.25}.c{text-align:center}.b{font-weight:700}hr{border:0;border-top:1px solid #000}hr.thick{border-top:2px solid #000}.row{display:flex;justify-content:space-between}.tag{border:1.5px solid #000;padding:0 3px;font-weight:700;font-size:8pt}</style>` + R.ticketHTML(R.conRepartidor(s), R.printCfg()); });
   const wa = await p.evaluate(() => window.__ruteador.routeText(window.__ruteador.currentSched()[0]));

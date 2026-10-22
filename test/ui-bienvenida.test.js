@@ -30,8 +30,8 @@ const srv = http.createServer((q, r) => {
   await shot('inicio');
   await click('.welcome'); await shot('bienvenida');
   await click('.topbar .icon-btn'); await click('.tabbar button:has-text("Más")'); await click('.mi:has-text("Apps y accesos")'); await shot('apps-instalar');
-  await click('.app-row:has-text("Packatelas") .btn.primary'); await shot('apk-instrucciones', false); await click('.modal .btn:has-text("Cancelar")');
-  await click('.app-row:has-text("My Driver") .chk'); await click('.app-row:has-text("Envíos Flex") .chk'); await click('.app-row:has-text("Packatelas") .chk');
+  await click('.app-row:has-text("Packatelas") .app-act .btn'); await shot('apk-instrucciones', false); await click('.modal .btn:has-text("Cancelar")');
+  // En Android ya no hay "Ya la tengo": el botón Abrir comprueba si la app está instalada (intent con regreso a la página)
   await click('.seg button:has-text("Accesos")'); await shot('apps-accesos');
   await click('.topbar .icon-btn'); await shot('bienvenida-avance');
   await p.evaluate(() => localStorage.clear()); await p.goto('http://localhost:8766/?demo');

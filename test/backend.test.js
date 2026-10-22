@@ -285,8 +285,8 @@ t('bienvenida: pasos automáticos, docs, apps de repartidor y accesos', () => {
   // Saidd es repartidor (puesto); Casandra es repartidora con flotilla_id; empleado 92 sin puesto
   let b = ok(call('bienvenida', {}, tok4));
   assert.strictEqual(b.rol, 'repartidor');
-  assert.deepStrictEqual(b.pasos.map(x => x.id), ['acceso', 'documentos', 'apps', 'checador', 'notificaciones']);
-  assert.deepStrictEqual(b.pasos.map(x => x.hecho), [true, false, false, false, true]); // ya registró push antes
+  assert.deepStrictEqual(b.pasos.map(x => x.id), ['acceso', 'documentos', 'apps', 'checador', 'notificaciones', 'datos']);
+  assert.deepStrictEqual(b.pasos.map(x => x.hecho), [true, false, false, false, true, false]); // ya registró push antes
   b = ok(call('docsRecibidos', { no_empleado: '4', recibidos: true }, admin));
   assert(b.pasos[1].hecho);
   const apps = ok(call('apps', {}, tok4));
@@ -301,6 +301,30 @@ t('bienvenida: pasos automáticos, docs, apps de repartidor y accesos', () => {
   b = ok(call('bienvenida', {}, tok4));
   assert(!b.pasos[3].hecho, 'un celular del kiosco ya no cuenta');
   checadas.data.push(['ZK-1', D('2026-10-15'), '09:00:00', '4', '', 'ENTRADA', '', 'ZKTeco A3B7214760517', '', '', 'Huella (checador ZKTeco)', '']);
+  b = ok(call('bienvenida', {}, tok4));
+  assert(!b.completa && b.pasos[5].id === 'datos' && !b.pasos[5].hecho);
+  assert.strictEqual(ok(call('inicio', {}, tok4)).datos_pendientes, true);
+  // Domicilio con pin y 2 contactos de emergencia (validados)
+  const dom = { calle: 'Av. Siempre Viva 742', colonia: 'Obrera', cp: '06800', municipio: 'Cuauhtémoc', estado: 'Ciudad de México', lat: 19.4201, lng: -99.1402, dist_m: 35 };
+  fail(call('guardarMisDatos', { domicilio: Object.assign({}, dom, { calle: 'Av. Siempre Viva' }) }, tok4), /número exterior/);
+  fail(call('guardarMisDatos', { domicilio: Object.assign({}, dom, { cp: '0680' }) }, tok4), /5 dígitos/);
+  fail(call('guardarMisDatos', { domicilio: Object.assign({}, dom, { cp: '54000' }) }, tok4), /no es de la Ciudad de México/);
+  fail(call('guardarMisDatos', { domicilio: Object.assign({}, dom, { lat: '', lng: '' }) }, tok4), /pin/);
+  fail(call('guardarMisDatos', { domicilio: Object.assign({}, dom, { lat: 25.6, lng: -100.3 }) }, tok4), /lejos/);
+  let pf = ok(call('guardarMisDatos', { domicilio: dom }, tok4));
+  assert.strictEqual(pf.domicilio.lat, 19.4201); assert(/Col\. Obrera/.test(pf.domicilio.texto)); assert.strictEqual(pf.completos.domicilio, true);
+  const c1 = { nombre: 'María López', telefono: '55 1234 0001', parentesco: 'Mamá' }, c2 = { nombre: 'Pedro López', telefono: '+52 1 55 1234 0002', parentesco: 'Hermano' };
+  fail(call('guardarMisDatos', { contactos: [c1] }, tok4), /2 contactos/);
+  fail(call('guardarMisDatos', { contactos: [{ nombre: 'María', telefono: '5512340001', parentesco: 'Mamá' }, c2] }, tok4), /nombre y apellido/);
+  fail(call('guardarMisDatos', { contactos: [c1, Object.assign({}, c2, { telefono: '5512340001' })] }, tok4), /mismo teléfono/);
+  fail(call('guardarMisDatos', { contactos: [c1, Object.assign({}, c2, { telefono: '1111111111' })] }, tok4), /no parece real/);
+  fail(call('guardarMisDatos', { contactos: [c1, Object.assign({}, c2, { parentesco: '' })] }, tok4), /parentesco/);
+  pf = ok(call('guardarMisDatos', { contactos: [c1, c2] }, tok4));
+  assert.deepStrictEqual(pf.contactos.map(c => c.telefono), ['5512340001', '5512340002']);
+  const em = ok(call('emergencias', {}, admin)).find(x => x.no_empleado === '4');
+  assert.strictEqual(em.contactos[1].parentesco, 'Hermano'); assert.strictEqual(em.domicilio.cp, '06800');
+  fail(call('emergencias', {}, tok4), /Sin permiso/);
+  assert.strictEqual(ok(call('personal', {}, admin)).find(p => p.no_empleado === '4').contactos[0].nombre, 'María López');
   b = ok(call('bienvenida', {}, tok4));
   assert(b.completa, JSON.stringify(b.pasos.map(x => x.hecho)));
   const i = ok(call('inicio', {}, tok4));
@@ -705,6 +729,107 @@ t('operación: GPS de Shipday en prueba, recolecciones con aprobación y alcance
   assert.strictEqual(ok(call('alcanceMotoChica', { puntos: [[19.43, -99.14], [19.6, -99.05]] }, admin)).consultas, 0);
   // proxy TomTom evita autopistas en rutas de moto chica
   ok(call('guardarClaves', { tomtom: '-' }, admin));
+});
+
+t('historial de entregas, jerarquía, asistencia para el ruteador y alertas de GPS e inactividad', () => {
+  const { ctx } = env;
+  const calls = [];
+  const resp = (code, obj) => ({ getResponseCode: () => code, getContentText: () => JSON.stringify(obj) });
+  const ord = (id, st, car, t, extra) => Object.assign({ orderId: id, orderNumber: 'ML-' + id, assignedCarrier: car ? { id: car, name: 'C' + car } : null, assignedCarrierId: car || -1,
+    orderStatus: { orderState: st }, activityLog: st === 'ALREADY_DELIVERED' ? { placementTime: '2026-10-01T10:00:00Z', deliveryTime: t } : { placementTime: '2026-10-01T10:00:00Z' }, failedDeliveryTime: st !== 'ALREADY_DELIVERED' ? t : undefined }, extra || {});
+  const Q = { ALREADY_DELIVERED: [], FAILED_DELIVERY: [], INCOMPLETE: [] };
+  let id = 1000;
+  for (let i = 0; i < 30; i++) Q.ALREADY_DELIVERED.push(ord(id++, 'ALREADY_DELIVERED', 11, '2026-10-12T17:00:00Z'));
+  for (let i = 0; i < 2; i++) Q.FAILED_DELIVERY.push(ord(id++, 'FAILED_DELIVERY', 11, '2026-10-12T18:00:00Z'));
+  for (let i = 0; i < 10; i++) Q.ALREADY_DELIVERED.push(ord(id++, 'ALREADY_DELIVERED', 44, '2026-10-12T19:00:00Z'));
+  for (let i = 0; i < 50; i++) Q.ALREADY_DELIVERED.push(ord(id++, 'ALREADY_DELIVERED', 44, '2026-10-05T19:00:00Z'));
+  for (let i = 0; i < 10; i++) Q.ALREADY_DELIVERED.push(ord(id++, 'ALREADY_DELIVERED', 44, '2026-10-06T19:00:00Z'));
+  for (let i = 0; i < 5; i++) Q.ALREADY_DELIVERED.push(ord(id++, 'ALREADY_DELIVERED', 99, '2026-10-12T19:00:00Z'));
+  Q.ALREADY_DELIVERED.push(ord(id++, 'ALREADY_DELIVERED', 11, '2026-10-12T19:00:00Z', { orderNumber: 'RECOLECCION-77' }));
+  Q.ALREADY_DELIVERED.push(ord(id++, 'ALREADY_DELIVERED', 11, '2026-09-20T19:00:00Z')); // fuera del rango pedido
+  Q.INCOMPLETE.push(ord(id++, 'INCOMPLETE', 44, '2026-10-12T20:00:00Z'));
+  let pos = { 11: [19.4300, -99.1400], 44: [19.4182, -99.1369] };
+  const fetchOne = (url, o = {}) => {
+    calls.push(url);
+    if (/fcm\.googleapis/.test(url)) { env.pushes.push(JSON.parse(o.payload).message); return resp(200, {}); }
+    if (/shipday\.com\/orders\/query/.test(url)) { const b = JSON.parse(o.payload); assert(/Z$/.test(b.startTime)); const l = Q[b.orderStatus] || []; return resp(200, l.slice(b.startCursor - 1, b.endCursor)); }
+    if (/shipday\.com\/carriers/.test(url)) return resp(200, Object.keys(pos).map(k => ({ id: +k, name: 'C' + k, isOnShift: true, isActive: true, carrrierLocationLat: pos[k][0], carrrierLocationLng: pos[k][1] })));
+    if (/shipday\.com\/orders\//.test(url)) return resp(200, [{ orderId: 1, orderStatus: { orderState: 'STARTED' }, activityLog: {} }]);
+    if (/tomtom/.test(url)) return resp(200, { routes: [{ summary: { travelTimeInSeconds: 600 } }] });
+    return resp(404, {});
+  };
+  ctx.UrlFetchApp = { fetch: fetchOne, fetchAll: reqs => reqs.map(r => fetchOne(r.url, r)) };
+  // 1) Historial desde Shipday
+  fail(call('historialActualizar', { desde: '2026-09-01', hasta: '2026-10-12' }, admin), /31 días/);
+  const h = ok(call('historialActualizar', { desde: '2026-10-01', hasta: '2026-10-12' }, admin));
+  assert.strictEqual(h.entregados, 105, JSON.stringify(h)); assert.strictEqual(h.sin_vincular, 1);
+  assert(calls.filter(u => /orders\/query/.test(u)).length >= 4, 'pagina de 100 en 100');
+  // recalcular no duplica
+  ok(call('historialActualizar', { desde: '2026-10-12', hasta: '2026-10-12' }, admin));
+  const v = ok(call('historialEntregas', { fecha: '2026-10-12' }, admin));
+  const r4 = v.repartidores.find(x => x.no_empleado === '4'), r5 = v.repartidores.find(x => x.no_empleado === '5');
+  assert.deepStrictEqual([r4.dia.ent, r4.dia.fal, r4.dia.pct], [30, 2, 93.8]);
+  assert.deepStrictEqual([r5.dia.ent, r5.dia.fal, r5.semana.ent, r5.mes.ent], [10, 1, 10, 70]);
+  assert.deepStrictEqual(v.semana, ['2026-10-12', '2026-10-18']); assert.deepStrictEqual(v.mes, ['2026-10-01', '2026-10-31']);
+  assert(v.repartidores.some(x => !x.vinculado && x.carrier_ids === '99' && x.dia.ent === 5));
+  // jerarquía: Casandra (60 entregas, 98%) arriba de Saidd (30, 94%)
+  assert.strictEqual(r5.jerarquia.rank, 1); assert.strictEqual(r4.jerarquia.rank, 2);
+  assert(v.repartidores.indexOf(r5) < v.repartidores.indexOf(r4));
+  const yo = ok(call('desempeno', { fecha: '2026-10-12' }, tok4));
+  assert.deepStrictEqual([yo.dia.ent, yo.jerarquia.rank, yo.jerarquia.de], [30, 2, 2]);
+  fail(call('historialEntregas', {}, tok4), /Sin permiso/);
+  // trigger: a las 16:00 cierra ayer una sola vez
+  const n0 = calls.length; run('tareaReporteRutas'); assert(calls.length > n0); const n1 = calls.length; run('tareaReporteRutas');
+  assert.strictEqual(calls.filter((u, i) => i >= n1 && /orders\/query/.test(u)).length, 0);
+  // 2) Ruteador: asistencia del checador, casa, moto y jerarquía
+  ok(call('guardarPersona', { persona: { no_empleado: '4', moto_tipo: 'chica' } }, admin));
+  fail(call('guardarPersona', { persona: { no_empleado: '4', moto_tipo: 'mediana' } }, admin), /moto/);
+  let rc = ok(call('rutasConfig', { fecha: '2026-10-12' }, admin));
+  const e4 = rc.empleados.find(x => x.no_empleado === '4');
+  assert.deepStrictEqual(e4.asistencia, { estado: 'presente', entrada: '9:05' });
+  assert.deepStrictEqual(e4.casa, [19.4201, -99.1402]); assert.strictEqual(e4.moto_tipo, 'chica'); assert.strictEqual(e4.rango.rank, 2);
+  assert.strictEqual(rc.empleados.find(x => x.no_empleado === '92').asistencia.estado, 'sin_checar');
+  rc = ok(call('rutasConfig', { fecha: '2026-10-13' }, admin));
+  assert.strictEqual(rc.empleados.find(x => x.no_empleado === '4').asistencia.estado, 'programado');
+  assert.strictEqual(rc.empleados.find(x => x.no_empleado === '4').casa[0], 19.4201);
+  // 3) Producción: fuera de ruta (2 muestras seguidas a más de 800 m) y 1 h sin entregar
+  const ruta = { no_empleado: '4', sugerido: '5', num: 1, total: 1, salida: '14:30', fin: '17:30', limite: '19:00', km: 12, deposito: [19.4182, -99.1369],
+    geom: [[19.4182, -99.1369], [19.4300, -99.1400], [19.4500, -99.1500]],
+    paradas: [{ eta: '14:50', envios: ['7001'], lat: 19.43, lng: -99.14, espera: 10 }, { eta: '15:30', envios: ['7002'], lat: 19.45, lng: -99.15, espera: 10 }] };
+  ok(call('publicarRutas', { fecha: '2026-10-12', rutas: [ruta] }, admin));
+  const filaR = () => { const sh = maestro.getSheetByName('Rutas'); const hh = sh.data[0]; const r = sh.data.filter(x => x[hh.indexOf('estatus')] === 'activa').pop(); return Object.fromEntries(hh.map((k, i) => [k, r[i]])); };
+  assert.strictEqual(filaR().sugerido, '5'); assert.strictEqual(filaR().aprobado_por, '1');
+  const alertas = () => ok(call('bandeja', {}, admin)).filter(x => /se salió de su ruta/.test(x.titulo));
+  let g = ok(call('gpsAhora', {}, admin));
+  assert.strictEqual(g.desvios, 0); assert.strictEqual(JSON.parse(filaR().gps_json).d, 0);
+  pos[11] = [19.4800, -99.2000];   // ~6 km fuera
+  assert.strictEqual(ok(call('gpsAhora', {}, admin)).desvios, 0, 'una sola muestra no basta');
+  assert.strictEqual(ok(call('gpsAhora', {}, admin)).desvios, 1);
+  assert.strictEqual(ok(call('gpsAhora', {}, admin)).desvios, 0, 'no se repite');
+  const al = alertas();
+  assert.strictEqual(al.length, 1); assert(/Ruta 1 · Saidd se salió/.test(al[0].titulo)); assert(/km del recorrido/.test(al[0].mensaje) && /maps\.google\.com/.test(al[0].mensaje), al[0].mensaje);
+  // regresa a la ruta y vuelve a salirse → nuevo aviso
+  pos[11] = [19.4400, -99.1450]; ok(call('gpsAhora', {}, admin));
+  assert.strictEqual(JSON.parse(filaR().gps_json).a, 0);
+  // en la comida no cuenta
+  checadas.data.push(['u', D('2026-10-12'), '15:50:00', '4', '', 'SALIDA A COMER', '', 'Ipad', '', '', '', '']);
+  pos[11] = [19.4800, -99.2000]; ok(call('gpsAhora', {}, admin)); ok(call('gpsAhora', {}, admin));
+  assert.strictEqual(alertas().length, 1);
+  checadas.data.pop();
+  const gp = ok(call('gpsPrueba', { fecha: '2026-10-12' }, admin));
+  assert.strictEqual(gp.modo, 'produccion'); assert(gp.alertas.find(a => a.num === 1));
+  // inactividad: 1ª parada ~14:50 y son las 16:00 sin entregas → aviso una vez
+  ok(call('seguimientoAhora', {}, admin));
+  const ina = ok(call('bandeja', {}, admin)).filter(x => /sin entregar/.test(x.titulo));
+  assert.strictEqual(ina.length, 1, JSON.stringify(ina)); assert(/Ruta 1 · Saidd lleva 1:10 h sin entregar/.test(ina[0].titulo), ina[0].titulo);
+  assert(/No ha entregado nada/.test(ina[0].mensaje) && /GPS:/.test(ina[0].mensaje), ina[0].mensaje);
+  ok(call('seguimientoAhora', {}, admin));
+  assert.strictEqual(ok(call('bandeja', {}, admin)).filter(x => /sin entregar/.test(x.titulo)).length, 1);
+  // apagado: no muestrea ni avisa
+  maestro.getSheetByName('ConfigPortal').data.find(r => r[0] === 'GPS_MODO')[1] = 'apagado';
+  const c0 = calls.filter(u => /carriers/.test(u)).length; run('tareaOperacion5');
+  assert.strictEqual(calls.filter(u => /carriers/.test(u)).length, c0);
+  maestro.getSheetByName('ConfigPortal').data.find(r => r[0] === 'GPS_MODO')[1] = 'produccion';
 });
 
 t('nómina histórica: sin firma, sin duplicados, ex-empleados como baja', () => {

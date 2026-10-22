@@ -45,7 +45,7 @@ export async function api(action, data = {}) {
 const LECTURAS = new Set(['inicio', 'perfil', 'asistencia', 'recibos', 'pagos', 'adeudos', 'solicitudes', 'bandeja', 'documentos', 'misDocumentos',
   'bienvenida', 'apps', 'miRuta', 'yo', 'recibo', 'reciboPdf', 'documento', 'archivo', 'estadoRfc', 'altaEstado',
   'panel', 'personal', 'asistenciaGeneral', 'asistenciaDe', 'prenomina', 'recibosAdmin', 'pagosAdmin', 'adeudosAdmin', 'solicitudesAdmin',
-  'avisosEnviados', 'bienvenidaDe', 'appsAdmin', 'altasAdmin', 'docsDeEmpleado', 'rutasAdmin', 'rutasConfig', 'tomtomRutas', 'shipdayMuestra']);
+  'avisosEnviados', 'bienvenidaDe', 'appsAdmin', 'altasAdmin', 'docsDeEmpleado', 'rutasAdmin', 'rutasConfig', 'tomtomRutas', 'shipdayMuestra', 'desempeno', 'historialEntregas', 'emergencias', 'gpsPrueba']);
 const FRESCO_MS = 20000;
 const mem = new Map(); // key → { data, t }
 const ckey = (action, data) => K + 'c_' + action + JSON.stringify(data);

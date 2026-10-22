@@ -25,7 +25,8 @@ const SCHEMA = {
   Personal: ['no_empleado', 'nombre', 'rfc', 'curp', 'nss', 'puesto', 'area', 'rol', 'estatus', 'fecha_ingreso',
     'fecha_baja', 'salario_diario', 'clabe', 'banco', 'telefono', 'correo', 'flotilla_id', 'carpeta_docs',
     'pin_hash', 'pin_intentos', 'pin_bloqueado', 'ultimo_acceso', 'notas', 'onb_rol', 'onb_docs', 'onb_apps', 'shipday_id',
-    'hora_entrada', 'dias_laborales', 'minutos_comida', 'checadas', 'actualizado'],
+    'hora_entrada', 'dias_laborales', 'minutos_comida', 'checadas', 'actualizado', 'moto_tipo', 'domicilio', 'dom_json', 'dom_lat', 'dom_lng',
+    'dom_fecha', 'emer1_nombre', 'emer1_tel', 'emer1_parentesco', 'emer2_nombre', 'emer2_tel', 'emer2_parentesco'],
   Recibos: ['recibo_id', 'no_empleado', 'nombre', 'periodo', 'desde', 'hasta', 'dias', 'salario_diario',
     'sueldo', 'bonos', 'otras_percepciones', 'desc_faltas', 'desc_retardos', 'desc_cargos', 'desc_adeudos',
     'otras_deducciones', 'total_percepciones', 'total_deducciones', 'neto', 'detalle_json', 'pdf_id', 'estatus',
@@ -48,9 +49,10 @@ const SCHEMA = {
     'no_empleado', 'notas', 'fecha_resolucion', 'resuelta_por'],
   Rutas: ['ruta_id', 'fecha', 'no_empleado', 'nombre', 'num', 'total', 'salida', 'fin', 'km', 'paradas', 'envios', 'datos_json',
     'estatus', 'publicada_por', 'fecha_publicacion', 'visto', 'limite', 'seg_json', 'seg_actualizado', 'seg_recalculo', 'fin_estimado',
-    'estado_tiempo', 'retraso_min'],
+    'estado_tiempo', 'retraso_min', 'sugerido', 'aprobado_por', 'gps_json', 'inact_json'],
   ReporteRutas: ['fecha', 'ruta_id', 'no_empleado', 'nombre', 'envios', 'entregados', 'no_entregados', 'en_orden', 'fuera_orden',
     'pct_orden', 'tarde', 'retraso_prom', 'fin_plan', 'fin_real', 'otros_repartidores', 'calificacion', 'detalle_json', 'generado'],
+  HistorialEntregas: ['fecha', 'no_empleado', 'nombre', 'carrier_ids', 'entregados', 'fallidos', 'incompletos', 'total', 'pct', 'actualizado'],
   GpsLog: ['fecha', 'carrier_id', 'no_empleado', 'nombre', 'lat', 'lng', 'en_turno'],
   Recolecciones: ['rec_id', 'fecha', 'order_id', 'order_number', 'cliente', 'direccion', 'lat', 'lng', 'volumen', 'puntos', 'no_empleado',
     'nombre', 'carrier_id', 'estado', 'creada', 'resuelta', 'resuelta_por', 'nota'],
@@ -104,7 +106,12 @@ const CONFIG_DEFAULTS = [
   ['RUTA_TOLERANCIA_MIN', '20', 'Minutos de tolerancia contra la hora estimada antes de contar una entrega como tarde'],
   ['RUTA_REPORTE_HORA', '23', 'Hora (0-23) del reporte diario de rutas contra Shipday (después del límite de entrega de las 23:00)'],
   ['SHIPDAY_PREFIJO', 'ML-', 'Prefijo de los números de orden en Shipday (antes del número de shipment)'],
-  ['GPS_PRUEBA', 'SI', 'SI = cada 5 min se guarda la ubicación de los repartidores de Shipday (prueba, sin alertas)'],
+  ['GPS_MODO', 'produccion', 'produccion = cada 5 min se guarda el GPS de Shipday y se avisa si un repartidor se sale de su ruta · prueba = solo se guarda · apagado'],
+  ['GPS_DESVIO_M', '800', 'Metros fuera del recorrido planeado para contar que un repartidor se salió de su ruta'],
+  ['GPS_DESVIO_MUESTRAS', '2', 'Muestras seguidas (cada 5 min) fuera de ruta antes de avisar'],
+  ['RUTA_INACTIVIDAD_MIN', '60', 'Minutos sin entregar ni marcar fallido una parada antes de avisar (0 = no avisar)'],
+  ['JERARQUIA_DIAS', '30', 'Días hacia atrás que cuentan para la jerarquía de repartidores'],
+  ['JERARQUIA_PESO_EXITO', '0.6', 'Peso del % de éxito en la jerarquía (el resto es el volumen entregado)'],
   ['RECOLECCION_MODO', 'aprobacion', 'aprobacion = propone y un admin aprueba · automatico = asigna directo en Shipday · apagado'],
   ['RECOLECCION_HASTA', '12:00', 'Hora límite para asignar recolecciones en automático'],
   ['RECOLECCION_DESDE', '08:00', 'Hora desde la que se buscan recolecciones'],
@@ -176,6 +183,8 @@ const ACTIONS = {
   subirMiDocumento: { fn: subirMiDocumento_ },
   archivo:          { fn: archivo_ },
   cambiarPin:       { fn: cambiarPin_ },
+  guardarMisDatos:  { fn: (req, u) => guardarDatos_(u.no_empleado, req, u) },
+  desempeno:        { fn: (req, u) => desempeno_(u.no_empleado, req.fecha) },
 
   // Patrón
   panel:            { admin: true, fn: panel_ },
@@ -213,7 +222,7 @@ const ACTIONS = {
   // Rutas
   yo:               { fn: (req, u) => u },
   miRuta:           { fn: (req, u) => miRuta_(u.no_empleado, req.fecha) },
-  rutasConfig:      { ops: true, fn: rutasConfig_ },
+  rutasConfig:      { ops: true, fn: (req) => rutasConfig_(req) },
   guardarClaves:    { admin: true, fn: guardarClaves_ },
   tomtomRutas:      { ops: true, fn: tomtomRutas_ },
   publicarRutas:    { ops: true, fn: publicarRutas_ },
@@ -234,6 +243,10 @@ const ACTIONS = {
   seguimientoAhora: { ops: true, fn: () => seguimientoRutas_(true) },
   seguimientoRuta:  { ops: true, fn: (req) => seguimientoDetalle_(req.ruta_id) },
   shipdayMuestra:   { ops: true, fn: shipdayMuestra_ },
+  emergencias:      { ops: true, fn: emergencias_ },
+  guardarDatosDe:   { ops: true, fn: (req, u) => { if (!req.no_empleado) throw new Error('Falta el empleado'); return guardarDatos_(String(req.no_empleado), req, u); } },
+  historialEntregas:{ ops: true, fn: (req) => historialEntregas_(req.fecha || hoy_()) },
+  historialActualizar: { ops: true, fn: (req) => historialCalcular_(req.desde || hoy_(), req.hasta || req.desde || hoy_()) },
 };
 
 // ───────────────────────── Instalación ─────────────────────────
@@ -277,7 +290,7 @@ function ensureTab_(name, headers) {
     if (missing.length) sh.getRange(1, have.filter(String).length + 1, 1, missing.length).setValues([missing]);
   }
   // Textos que Sheets no debe convertir (RFC, CLABE, números de empleado, IDs)
-  ['no_empleado', 'clabe', 'rfc', 'curp', 'nss', 'telefono', 'flotilla_id', 'shipday_id', 'clave_rastreo', 'periodo', 'salida', 'fin', 'fin_plan', 'fin_real'].forEach(col => {
+  ['no_empleado', 'clabe', 'rfc', 'curp', 'nss', 'telefono', 'flotilla_id', 'shipday_id', 'emer1_tel', 'emer2_tel', 'carrier_ids', 'sugerido', 'aprobado_por', 'clave_rastreo', 'periodo', 'salida', 'fin', 'fin_plan', 'fin_real'].forEach(col => {
     const i = headers.indexOf(col);
     if (i >= 0) sh.getRange(1, i + 1, sh.getMaxRows(), 1).setNumberFormat('@');
   });
@@ -605,6 +618,8 @@ function inicio_(req, u) {
     accesos: appsPara_(u.no_empleado).filter(a => a.acceso_directo),
     ruta: rutaResumen_(u.no_empleado),
     flotilla: flotillaHoy_(u.no_empleado),
+    datos_pendientes: (c => !c.domicilio || !c.contactos)(datosCompletos_(persona_(u.no_empleado))),
+    desempeno: rolBienvenida_(persona_(u.no_empleado)) === 'repartidor' ? (d => ({ dia: d.dia, semana: d.semana, jerarquia: d.jerarquia }))(desempeno_(u.no_empleado)) : null,
   };
 }
 
@@ -618,6 +633,8 @@ function perfil_(no) {
     horario: { entrada: e.entrada || '', dias: e.diasTxt || '', comida: e.comida || '' },
     vacaciones: vacaciones_(p),
     celular_checador: !!e.celular,
+    moto_tipo: p.moto_tipo || '',
+    domicilio: domicilioDe_(p), contactos: contactosDe_(p), completos: datosCompletos_(p),
   };
 }
 
@@ -1637,6 +1654,8 @@ function bienvenida_(no) {
     faltan: apps.filter(a => !a.lista).map(a => a.nombre) });
   pasos.push({ id: 'checador', titulo: 'Registra tu huella en el checador', detalle: 'Con RH, en el checador de la base', hecho: !!e.celular, auto: true });
   pasos.push({ id: 'notificaciones', titulo: 'Activa las notificaciones', detalle: 'Para tu recibo y tu depósito', hecho: push, auto: true });
+  const dc = datosCompletos_(p);
+  pasos.push({ id: 'datos', titulo: 'Tu domicilio y 2 contactos de emergencia', detalle: [dc.domicilio ? 'Domicilio ✓' : 'Falta tu domicilio', dc.contactos ? 'contactos ✓' : 'faltan contactos'].join(' · '), hecho: dc.domicilio && dc.contactos });
   const hechos = pasos.filter(x => x.hecho).length;
   const sig = pasos.find(x => !x.hecho);
   return { rol: rol, rol_fijo: !!String(p.puesto || '').trim() || !!p.flotilla_id, pasos: pasos, hechos: hechos, total: pasos.length,
@@ -1934,6 +1953,7 @@ function personalAdmin_() {
       hora_entrada: horaTexto_(p.hora_entrada) || e.entrada || '', dias_laborales: String(p.dias_laborales || e.diasTxt || ''),
       minutos_comida: p.minutos_comida === '' || p.minutos_comida == null ? (e.no ? e.comida : '') : Number(p.minutos_comida),
       checadas: String(p.checadas || e.checadas || ''),
+      moto_tipo: p.moto_tipo || '', domicilio: domicilioDe_(p), contactos: contactosDe_(p),
       docs_por_revisar: rows_('DocsEmpleado').filter(d => d.owner === 'E:' + p.no_empleado && d.estatus === 'subido').length,
       bienvenida: p.estatus === 'baja' ? null : (b => ({ hechos: b.hechos, total: b.total, completa: b.completa }))(bienvenida_(p.no_empleado)),
     };
@@ -1941,7 +1961,7 @@ function personalAdmin_() {
 }
 
 const CAMPOS_EDITABLES = ['nombre', 'rfc', 'curp', 'nss', 'puesto', 'area', 'rol', 'estatus', 'fecha_ingreso', 'fecha_baja', 'salario_diario',
-  'clabe', 'banco', 'telefono', 'correo', 'flotilla_id', 'shipday_id', 'notas', 'hora_entrada', 'dias_laborales', 'minutos_comida', 'checadas'];
+  'clabe', 'banco', 'telefono', 'correo', 'flotilla_id', 'shipday_id', 'notas', 'hora_entrada', 'dias_laborales', 'minutos_comida', 'checadas', 'moto_tipo'];
 const DIAS_VALIDOS = ['L', 'M', 'MI', 'J', 'V', 'S', 'D'];
 const CHECADAS_VALIDAS = ['ENTRADA', 'SALIDA_COMIDA', 'REGRESO_COMIDA', 'SALIDA'];
 
@@ -1954,6 +1974,7 @@ function guardarPersona_(req, u) {
     if (upd.curp) upd.curp = String(upd.curp).toUpperCase();
     if (upd.clabe) { upd.clabe = String(upd.clabe).replace(/\D/g, ''); if (!clabeValida_(upd.clabe)) throw new Error('La CLABE no es válida (revisa los 18 dígitos)'); }
     if (upd.rol && ['patron', 'admin', 'empleado'].indexOf(upd.rol) < 0) throw new Error('Rol inválido');
+    if (upd.moto_tipo !== undefined) { if (['', 'grande', 'chica'].indexOf(upd.moto_tipo) < 0) throw new Error('Tipo de moto inválido'); personalCols_(); }
     if (upd.rol === 'patron' && u.rol !== 'patron') throw new Error('Solo un patrón puede dar el rol de patrón');
     if (upd.salario_diario !== undefined) upd.salario_diario = num_(upd.salario_diario);
     if (upd.fecha_ingreso) upd.fecha_ingreso = parseFecha_(upd.fecha_ingreso);
@@ -2016,6 +2037,7 @@ function asegurarTriggerReporte_() {
     if (h.indexOf('tareaSeguimientoRutas') < 0) ScriptApp.newTrigger('tareaSeguimientoRutas').timeBased().everyMinutes(10).create();
     if (h.indexOf('tareaOperacion5') < 0) ScriptApp.newTrigger('tareaOperacion5').timeBased().everyMinutes(5).create();
   } catch (e) { console.warn('trigger rutas', e); }
+  asegurarConfig_();
 }
 function rutasTabs_() {
   ['Rutas', 'ReporteRutas'].forEach(n => {
@@ -2024,12 +2046,35 @@ function rutasTabs_() {
   });
 }
 
-function rutasConfig_() {
+/**
+ * Datos para el ruteador: empleados con asistencia del día (checador), casa (pin del portal), tipo de moto y jerarquía.
+ * fecha = hoy → presente / salió / sin checar / descanso; fecha futura → programado / descanso según su horario.
+ */
+function rutasConfig_(req) {
   const per = rows_('Personal').filter(p => p.estatus !== 'baja');
+  const hoy = hoy_();
+  const fecha = /^\d{4}-\d{2}-\d{2}$/.test(String((req && req.fecha) || '')) ? req.fecha : hoy;
+  const chk = fecha === hoy ? checadasPorDia_(hoy, hoy) : {};
+  const emp = empleadosChecador_();
+  const jer = jerarquia_();
+  const rk = {}; jer.lista.forEach(x => { rk[x.no_empleado] = x; });
   return {
-    tomtom: !!prop_('TOMTOM_KEY'), shipday: !!prop_('SHIPDAY_KEY'),
-    empleados: per.map(p => ({ no_empleado: String(p.no_empleado), nombre: p.nombre, telefono: String(p.telefono || ''), repartidor: rolBienvenida_(p) === 'repartidor' }))
-      .sort((a, b) => (b.repartidor - a.repartidor) || String(a.nombre).localeCompare(String(b.nombre))),
+    tomtom: !!prop_('TOMTOM_KEY'), shipday: !!prop_('SHIPDAY_KEY'), fecha: fecha, hoy: hoy, jerarquia_dias: jer.dias,
+    empleados: per.map(p => {
+      const no = String(p.no_empleado), e = emp.find(x => x.no === no) || {};
+      const laboral = parseDias_(p.dias_laborales || e.diasTxt || '').indexOf(diaSemana_(fecha)) >= 0;
+      let asis;
+      if (fecha === hoy) {
+        const m = (chk[no] || {})[hoy] || [];
+        const ent = m.find(t => t.tipo === 'ENTRADA'), sal = m.filter(t => t.tipo === 'SALIDA').pop();
+        asis = ent ? (sal ? { estado: 'salio', entrada: ent.hora, salida: sal.hora } : { estado: 'presente', entrada: ent.hora }) : { estado: laboral ? 'sin_checar' : 'descanso' };
+      } else asis = { estado: fecha > hoy ? (laboral ? 'programado' : 'descanso') : 'pasado' };
+      const d = domicilioDe_(p), r = rk[no];
+      return { no_empleado: no, nombre: p.nombre, telefono: String(p.telefono || ''), repartidor: rolBienvenida_(p) === 'repartidor',
+        moto_tipo: p.moto_tipo || '', casa: d.lat != null ? [d.lat, d.lng] : null, colonia: d.colonia ? d.colonia + ', ' + d.municipio : '',
+        asistencia: asis, shipday: idsShipday_(p).length > 0,
+        rango: r ? { rank: r.rank, de: jer.lista.length, score: r.score, pct: r.pct, entregados: r.entregados, dias: r.dias } : null };
+    }).sort((a, b) => (b.repartidor - a.repartidor) || String(a.nombre).localeCompare(String(b.nombre))),
   };
 }
 
@@ -2142,10 +2187,11 @@ function publicarRutas_(req, u) {
       append_('Rutas', { ruta_id: id, fecha: fecha, no_empleado: String(p.no_empleado), nombre: p.nombre, num: rt.num, total: rt.total,
         salida: rt.salida, fin: rt.fin, limite: /^\d{1,2}:\d{2}$/.test(String(rt.limite || '')) ? rt.limite : '', fin_estimado: rt.fin, estado_tiempo: '', km: round_(rt.km, 1), paradas: (rt.paradas || []).length,
         envios: (rt.paradas || []).reduce((s, x) => s + (x.envios || []).length, 0), datos_json: txt, estatus: 'activa',
-        publicada_por: u.no_empleado, fecha_publicacion: new Date(), visto: '' });
+        publicada_por: u.no_empleado, fecha_publicacion: new Date(), visto: '', sugerido: String(rt.sugerido || ''), aprobado_por: u.no_empleado });
       pubs.push({ id: id, no: String(p.no_empleado), rt: rt });
     });
-    bitacora_(u.no_empleado, 'publicar_rutas', 'Rutas', fecha, pubs.map(x => x.id).join(','));
+    const cambios = rutas.filter(x => x.sugerido && String(x.sugerido) !== String(x.no_empleado)).length;
+    bitacora_(u.no_empleado, 'publicar_rutas', 'Rutas', fecha, pubs.map(x => x.id).join(',') + (rutas.some(x => x.sugerido) ? ' · ' + cambios + ' cambio(s) a la sugerencia' : ''));
     return pubs;
   });
   asegurarTriggerReporte_();
@@ -2334,6 +2380,8 @@ function seguimientoRutas_(forzar) {
         'Con el tráfico actual terminaría a las ' + fin + ', ' + retraso + ' min después de las ' + limiteDe_(x) + '. Le quedan ' + s.pendientes + ' envío(s).', x.ruta_id]);
     if (estado === 'a_tiempo' && x.estado_tiempo === 'tarde')
       avisos.push(['ruta_tarde', '👍 Ruta ' + x.num + ' (' + primerNombre_(x.nombre) + ') vuelve a ir a tiempo', 'Termina aprox ' + fin + '.', x.ruta_id]);
+    const ina = r.restantes.length ? inactividad_(x, r.seg, datos[x.ruta_id], nowMin, s) : null;
+    if (ina) { update_('Rutas', x._row, { inact_json: JSON.stringify(ina.estado) }); avisos.push(ina.aviso); }
   }));
   avisos.forEach(a => notificarOps_(a[0], a[1], a[2], a[3]));
   return { rutas: resumen.length, consultados: unicos_(pend).length, avisos: avisos.length };
@@ -2420,7 +2468,7 @@ function tabsOperacion_() { ['GpsLog', 'Recolecciones', 'ClientesRecoleccion', '
 function tareaOperacion5() {
   const hm = fmt_(new Date(), 'HH:mm');
   if (hm < '07:00' || hm > '23:30') return;
-  if (prop_('SHIPDAY_KEY') && String(config_('GPS_PRUEBA', 'SI')).toUpperCase() === 'SI') { try { gpsMuestrear_(); } catch (e) { console.warn('gps', e); } }
+  if (prop_('SHIPDAY_KEY') && gpsModo_() !== 'apagado') { try { gpsMuestrear_(); } catch (e) { console.warn('gps', e); } }
   const modo = String(config_('RECOLECCION_MODO', 'aprobacion'));
   if (prop_('SHIPDAY_KEY') && modo !== 'apagado' && hm >= String(config_('RECOLECCION_DESDE', '08:00')) && hm <= String(config_('RECOLECCION_HASTA', '12:00'))) {
     try { recoleccionesBuscar_(false); } catch (e) { console.warn('recolecciones', e); }
@@ -2441,19 +2489,22 @@ function gpsMuestrear_() {
   tabsOperacion_();
   const per = rows_('Personal'), ahora = new Date();
   let n = 0;
-  const filas = [];
+  const filas = [], pos = {};
   shipdayCarriers_().forEach(c => {
     const lat = c.carrrierLocationLat != null ? c.carrrierLocationLat : c.carrierLocationLat, lng = c.carrrierLocationLng != null ? c.carrrierLocationLng : c.carrierLocationLng;
     if (c.isActive === false || (!c.isOnShift && lat == null)) return;
     const e = empleadoDeCarrier_(c.id, per);
     filas.push([ahora, String(c.id), e ? String(e.no_empleado) : '', c.name || '', lat == null ? '' : Number(lat), lng == null ? '' : Number(lng), c.isOnShift ? 'SI' : 'NO']);
+    if (lat != null && lng != null) pos[String(c.id)] = { lat: Number(lat), lng: Number(lng) };
     n++;
   });
   if (filas.length) { const sh = sheet_('GpsLog'); sh.getRange(sh.getLastRow() + 1, 1, filas.length, filas[0].length).setValues(filas); delete _cache['r:GpsLog']; }
   // conservar solo 10 días
   const sh = sheet_('GpsLog');
   if (sh.getLastRow() > 30000) sh.deleteRows(2, sh.getLastRow() - 25000);
-  return { muestras: n };
+  let desvios = 0;
+  if (gpsModo_() === 'produccion') { try { desvios = revisarDesvios_(pos, ahora); } catch (e) { console.warn('desvios', e); } }
+  return { muestras: n, desvios: desvios };
 }
 
 /** Análisis de un día de prueba: cada cuánto cambia la ubicación y qué paradas de 15+ min se habrían detectado. */
@@ -2464,7 +2515,7 @@ function gpsPrueba_(fecha) {
   const por = {};
   filas.forEach(r => { (por[r.carrier_id] = por[r.carrier_id] || { carrier_id: String(r.carrier_id), nombre: r.nombre, no_empleado: String(r.no_empleado || ''), m: [] }).m.push(r); });
   const per = rows_('Personal');
-  return { fecha: fecha, activo: String(config_('GPS_PRUEBA', 'SI')).toUpperCase() === 'SI', repartidores: Object.keys(por).map(k => {
+  return { fecha: fecha, activo: gpsModo_() !== 'apagado', modo: gpsModo_(), alertas: alertasGps_(fecha), repartidores: Object.keys(por).map(k => {
     const x = por[k];
     const m = x.m.map(r => ({ t: new Date(r.fecha).getTime(), lat: r.lat === '' ? null : Number(r.lat), lng: r.lng === '' ? null : Number(r.lng), turno: r.en_turno === 'SI' })).sort((a, b) => a.t - b.t);
     const conGps = m.filter(p => p.lat != null);
@@ -2871,6 +2922,7 @@ function reporteRutas_(fecha, automatico) {
 
 /** Cada hora revisa si ya toca el reporte del día (RUTA_REPORTE_HORA) y lo manda una sola vez. */
 function tareaReporteRutas() {
+  if (prop_('SHIPDAY_KEY')) { try { tareaHistorial_(); } catch (e) { console.warn('historial', e); } }
   if (!ss_().getSheetByName('Rutas') || !prop_('SHIPDAY_KEY')) return;
   const hora = Number(fmt_(new Date(), 'HH'));
   if (hora < Number(config_('RUTA_REPORTE_HORA', 23))) return;
@@ -2895,6 +2947,392 @@ function enviarReporteRutas_(fecha, rep) {
     '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:Arial;font-size:13px"><tr style="background:#1f3a5f;color:#fff"><th>Repartidor</th><th>Entregados</th><th>En orden</th><th>Tarde</th><th>Fin plan / real</th><th>Entregó otro</th><th>Resultado</th></tr>' + filas + '</table>' +
     '<p style="font-family:Arial;font-size:12px;color:#666">Detalle por parada en el portal → Más → Rutas y reporte.</p>';
   try { MailApp.sendEmail(to, 'Reporte de rutas ' + fecha + ' · ' + resumen, resumen, { htmlBody: html }); } catch (e) { console.error('mail', e); }
+}
+
+// ───────────────────────── Mis datos: domicilio y contactos de emergencia ─────────────────────────
+
+/** Zona válida para el pin (CDMX, Edo. Méx. y estados vecinos). */
+const BBOX_CASA_ = { s: 18.3, n: 20.7, o: -100.7, e: -97.7 };
+function personalCols_() { if (SCHEMA.Personal.some(c => headers_('Personal').indexOf(c) < 0)) ensureTab_('Personal', SCHEMA.Personal); }
+function telMx_(t) {
+  let d = String(t || '').replace(/\D/g, '');
+  if (d.length === 13 && d.indexOf('521') === 0) d = d.slice(3);
+  if (d.length === 12 && d.indexOf('52') === 0) d = d.slice(2);
+  return d;
+}
+function domicilioDe_(p) {
+  let j = {}; try { j = JSON.parse(p.dom_json || '{}'); } catch (e) {}
+  const ok = v => v !== '' && v != null && isFinite(Number(v)) && Number(v) !== 0;
+  return { texto: String(p.domicilio || ''), calle: j.calle || '', colonia: j.colonia || '', cp: j.cp || '', municipio: j.municipio || '', estado: j.estado || '',
+    referencias: j.referencias || '', lat: ok(p.dom_lat) ? Number(p.dom_lat) : null, lng: ok(p.dom_lng) ? Number(p.dom_lng) : null,
+    dist_m: j.dist_m === '' || j.dist_m == null ? null : Number(j.dist_m), fecha: fmt_(p.dom_fecha, 'yyyy-MM-dd') };
+}
+function contactosDe_(p) {
+  return [1, 2].map(i => ({ nombre: String(p['emer' + i + '_nombre'] || ''), telefono: String(p['emer' + i + '_tel'] || ''), parentesco: String(p['emer' + i + '_parentesco'] || '') }));
+}
+function datosCompletos_(p) {
+  const d = domicilioDe_(p);
+  return { domicilio: !!(d.texto && d.lat != null), contactos: contactosDe_(p).every(c => c.nombre && c.telefono && c.parentesco) };
+}
+
+/** Guarda domicilio (con pin) y/o los 2 contactos de emergencia. Valida todo antes de escribir. */
+function guardarDatos_(no, req, u) {
+  return withLock_(() => {
+    personalCols_();
+    const p = persona_(no);
+    const upd = {};
+    if (req.domicilio) {
+      const d = req.domicilio;
+      const t = k => String(d[k] == null ? '' : d[k]).trim().replace(/\s+/g, ' ');
+      const calle = t('calle'), colonia = t('colonia'), cp = t('cp').replace(/\D/g, ''), mun = t('municipio'), edo = t('estado'), refs = t('referencias').slice(0, 300);
+      if (calle.length < 4) throw new Error('Escribe tu calle y número');
+      if (!/\d/.test(calle) && !/s\/?n\b|sin n[uú]m|mz|manzana|lote|\blt\b/i.test(calle)) throw new Error('Falta el número exterior (si no tiene, escribe S/N o manzana y lote)');
+      if (colonia.length < 3) throw new Error('Falta la colonia');
+      if (!/^\d{5}$/.test(cp)) throw new Error('El código postal debe tener 5 dígitos');
+      if (mun.length < 3) throw new Error('Falta la alcaldía o municipio');
+      if (!edo) throw new Error('Falta el estado');
+      const ncp = Number(cp);
+      if (/ciudad de m|cdmx/i.test(edo) && !(ncp >= 1000 && ncp <= 16999)) throw new Error('Ese código postal no es de la Ciudad de México (van del 01000 al 16999)');
+      if (/^estado de m/i.test(edo) && !(ncp >= 50000 && ncp <= 57999)) throw new Error('Ese código postal no es del Estado de México (van del 50000 al 57999)');
+      const lat = Number(d.lat), lng = Number(d.lng);
+      if (!isFinite(lat) || !isFinite(lng) || !lat || !lng) throw new Error('Coloca el pin de tu casa en el mapa');
+      if (lat < BBOX_CASA_.s || lat > BBOX_CASA_.n || lng < BBOX_CASA_.o || lng > BBOX_CASA_.e) throw new Error('El pin quedó muy lejos de la Ciudad de México; acomódalo en tu casa');
+      upd.domicilio = calle + ', Col. ' + colonia + ', ' + mun + ', ' + edo + ', CP ' + cp;
+      upd.dom_json = JSON.stringify({ calle: calle, colonia: colonia, cp: cp, municipio: mun, estado: edo, referencias: refs,
+        dist_m: isFinite(Number(d.dist_m)) && d.dist_m !== '' && d.dist_m != null ? Math.round(Number(d.dist_m)) : '' });
+      upd.dom_lat = round_(lat, 6); upd.dom_lng = round_(lng, 6); upd.dom_fecha = new Date();
+    }
+    if (req.contactos) {
+      const propio = telMx_(p.telefono);
+      const cs = (req.contactos || []).slice(0, 2).map((c, i) => {
+        const n = 'Contacto ' + (i + 1) + ': ';
+        const nombre = String(c.nombre || '').trim().replace(/\s+/g, ' '), tel = telMx_(c.telefono), par = String(c.parentesco || '').trim();
+        if (nombre.length < 5 || nombre.split(' ').length < 2) throw new Error(n + 'escribe nombre y apellido');
+        if (!/^\d{10}$/.test(tel)) throw new Error(n + 'el teléfono debe tener 10 dígitos');
+        if (/^(\d)\1{9}$/.test(tel) || tel === '1234567890' || tel === '0123456789') throw new Error(n + 'ese teléfono no parece real');
+        if (propio && tel === propio) throw new Error(n + 'no puede ser tu propio número');
+        if (par.length < 3) throw new Error(n + 'elige el parentesco');
+        return { nombre: nombre, tel: tel, par: par.slice(0, 40) };
+      });
+      if (cs.length < 2) throw new Error('Necesitamos 2 contactos de emergencia');
+      if (cs[0].tel === cs[1].tel) throw new Error('Los dos contactos tienen el mismo teléfono; pon a dos personas distintas');
+      cs.forEach((c, i) => { upd['emer' + (i + 1) + '_nombre'] = c.nombre; upd['emer' + (i + 1) + '_tel'] = c.tel; upd['emer' + (i + 1) + '_parentesco'] = c.par; });
+    }
+    if (!Object.keys(upd).length) throw new Error('Nada que guardar');
+    update_('Personal', p._row, upd);
+    bitacora_(u.no_empleado, 'guardar_datos', 'Personal', String(no), (req.domicilio ? 'domicilio ' : '') + (req.contactos ? 'contactos' : ''));
+    return perfil_(no);
+  });
+}
+
+/** Directorio para emergencias (admins y patrón): teléfono del empleado, sus 2 contactos y su domicilio. */
+function emergencias_() {
+  return rows_('Personal').filter(p => p.estatus !== 'baja').map(p => ({ no_empleado: String(p.no_empleado), nombre: p.nombre, puesto: p.puesto || '',
+    telefono: String(p.telefono || ''), contactos: contactosDe_(p), domicilio: domicilioDe_(p) }))
+    .sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
+}
+
+// ───────────────────────── Historial de entregas y jerarquía de repartidores ─────────────────────────
+
+function isoUtc_(d) { return d.toISOString().replace(/\.\d{3}Z$/, 'Z'); }
+
+/** Shipday POST /orders/query (por hora de creación, paginado). Devuelve las órdenes sin repetir. */
+function shipdayQuery_(desde, hasta, estado) {
+  const key = prop_('SHIPDAY_KEY');
+  if (!key) throw new Error('Falta la key de Shipday. Guárdala en el ruteador → Claves del servidor.');
+  const out = [], vistos = {}, PAG = 100;
+  for (let c = 1; c < 30000; c += PAG) {
+    const r = UrlFetchApp.fetch('https://api.shipday.com/orders/query', { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      headers: { Authorization: 'Basic ' + key, Accept: 'application/json' },
+      payload: JSON.stringify({ startTime: isoUtc_(desde), endTime: isoUtc_(hasta), orderStatus: estado, startCursor: c, endCursor: c + PAG - 1 }) });
+    const code = r.getResponseCode();
+    if (code === 401 || code === 403) throw new Error('Shipday rechazó la key (' + code + ')');
+    if (code !== 200) throw new Error('Shipday respondió ' + code + ' al consultar el historial (' + estado + ')');
+    let l = []; try { l = JSON.parse(r.getContentText()); } catch (e) {}
+    if (!Array.isArray(l) || !l.length) break;
+    let nuevos = 0;
+    l.forEach(o => { const id = String(o.orderId || o.id || ''); if (id && vistos[id]) return; if (id) vistos[id] = 1; out.push(o); nuevos++; });
+    if (l.length < PAG || !nuevos) break;
+    Utilities.sleep(250);
+  }
+  return out;
+}
+
+/**
+ * Recalcula HistorialEntregas para [desde, hasta] (máx. 31 días): por repartidor y día, envíos entregados,
+ * fallidos e incompletos en Shipday (sin recolecciones). Las órdenes se cuentan el día en que se entregaron o fallaron.
+ */
+function historialCalcular_(desde, hasta) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(desde) || !/^\d{4}-\d{2}-\d{2}$/.test(hasta) || hasta < desde) throw new Error('Rango de fechas inválido');
+  if (addDias_(desde, 31) <= hasta) throw new Error('Máximo 31 días por vez');
+  if (!ss_().getSheetByName('HistorialEntregas') || SCHEMA.HistorialEntregas.some(c => headers_('HistorialEntregas').indexOf(c) < 0)) ensureTab_('HistorialEntregas', SCHEMA.HistorialEntregas);
+  const ini = new Date(desde + 'T00:00:00-06:00'), fin = new Date(hasta + 'T23:59:59-06:00');
+  const qIni = new Date(ini.getTime() - 3 * 86400000), qFin = new Date(Math.min(fin.getTime(), Date.now() + 60000));
+  const per = rows_('Personal');
+  const agg = {}, vistos = {};
+  let leidas = 0;
+  [['ALREADY_DELIVERED', 'entregados'], ['FAILED_DELIVERY', 'fallidos'], ['INCOMPLETE', 'incompletos']].forEach(([st, campo]) => {
+    shipdayQuery_(qIni, qFin, st).forEach(o => {
+      leidas++;
+      if (esRecoleccion_(o)) return;
+      const id = String(o.orderId || o.id || '');
+      if (id && vistos[id]) return;
+      const al = o.activityLog || {};
+      const t = st === 'ALREADY_DELIVERED' ? shipdayFecha_(al.deliveryTime || o.deliveryTime)
+        : shipdayFecha_(al.failedDeliveryTime || o.failedDeliveryTime || al.arrivedTime || al.pickedUpTime || al.startTime || al.assignedTime || al.placementTime || o.placementTime);
+      if (!t) return;
+      const f = fmt_(t, 'yyyy-MM-dd');
+      if (f < desde || f > hasta) return;
+      const car = o.assignedCarrier || o.carrier || {};
+      const cid = String(car.id || o.assignedCarrierId || '');
+      if (!cid || Number(cid) <= 0) return;
+      if (id) vistos[id] = 1;
+      const e = empleadoDeCarrier_(cid, per);
+      const k = f + '|' + (e ? 'E' + e.no_empleado : 'C' + cid);
+      const a = agg[k] = agg[k] || { fecha: f, no_empleado: e ? String(e.no_empleado) : '', nombre: e ? e.nombre : (car.name || 'Shipday ' + cid), carriers: {}, entregados: 0, fallidos: 0, incompletos: 0 };
+      a.carriers[cid] = 1;
+      a[campo]++;
+    });
+  });
+  const ahora = new Date();
+  const nuevas = Object.keys(agg).map(k => agg[k]).map(a => {
+    const total = a.entregados + a.fallidos + a.incompletos;
+    return { fecha: a.fecha, no_empleado: a.no_empleado, nombre: a.nombre, carrier_ids: Object.keys(a.carriers).join(', '), entregados: a.entregados,
+      fallidos: a.fallidos, incompletos: a.incompletos, total: total, pct: total ? round_(a.entregados / total * 100, 1) : 0, actualizado: ahora };
+  }).sort((a, b) => a.fecha.localeCompare(b.fecha) || String(a.nombre).localeCompare(String(b.nombre)));
+  withLock_(() => {
+    const sh = sheet_('HistorialEntregas'), h = headers_('HistorialEntregas');
+    const quedan = rows_('HistorialEntregas').filter(r => { const f = fmt_(r.fecha, 'yyyy-MM-dd'); return f < desde || f > hasta; });
+    const todas = quedan.concat(nuevas).sort((a, b) => fmt_(a.fecha, 'yyyy-MM-dd').localeCompare(fmt_(b.fecha, 'yyyy-MM-dd')));
+    const last = sh.getLastRow();
+    if (last > 1) sh.getRange(2, 1, last - 1, h.length).clearContent();
+    if (todas.length) sh.getRange(2, 1, todas.length, h.length).setValues(todas.map(r => h.map(c => c === 'fecha' ? fmt_(r.fecha, 'yyyy-MM-dd') : (r[c] === undefined ? '' : r[c]))));
+    delete _cache['r:HistorialEntregas'];
+  });
+  return { desde: desde, hasta: hasta, filas: nuevas.length, ordenes: leidas,
+    entregados: nuevas.reduce((s, r) => s + r.entregados, 0), sin_vincular: nuevas.filter(r => !r.no_empleado).length };
+}
+
+/** Ejecutar desde el editor: llena los últimos 30 días del historial en tramos de 5 días (si se acaba el tiempo, vuelve a ejecutarla y sigue). */
+function historialInicial() {
+  const t0 = Date.now(), hoy = hoy_();
+  let desde = prop_('HIST_INICIAL_DESDE') || addDias_(hoy, -30);
+  while (desde <= hoy && Date.now() - t0 < 4.5 * 60000) {
+    const hasta = addDias_(desde, 4) < hoy ? addDias_(desde, 4) : hoy;
+    const r = historialCalcular_(desde, hasta);
+    console.log(desde + ' → ' + hasta + ': ' + r.entregados + ' entregas, ' + r.filas + ' filas, ' + r.ordenes + ' órdenes leídas, ' + r.sin_vincular + ' sin vincular');
+    desde = addDias_(hasta, 1);
+    setProp_('HIST_INICIAL_DESDE', desde);
+  }
+  if (desde > hoy) { setProp_('HIST_INICIAL_DESDE', ''); console.log('Historial completo.'); } else console.log('Falta desde ' + desde + ': vuelve a ejecutar historialInicial.');
+}
+
+/** Cada hora (desde tareaReporteRutas): a las 23 h guarda ayer y hoy; en la mañana vuelve a cerrar ayer (entregas tardías). */
+function tareaHistorial_() {
+  const h = Number(fmt_(new Date(), 'HH')), hoy = hoy_(), ayer = addDias_(hoy, -1);
+  if (h >= Number(config_('RUTA_REPORTE_HORA', 23))) { if (!prop_('HIST_' + hoy)) { historialCalcular_(ayer, hoy); setProp_('HIST_' + hoy, '1'); } }
+  else if (h >= 6 && !prop_('HIST_AM_' + hoy)) { historialCalcular_(ayer, ayer); setProp_('HIST_AM_' + hoy, '1'); }
+}
+
+function historialFilas_() {
+  if (!ss_().getSheetByName('HistorialEntregas')) return [];
+  return rows_('HistorialEntregas').map(r => ({ fecha: fmt_(r.fecha, 'yyyy-MM-dd'), no: String(r.no_empleado || ''), nombre: r.nombre, cid: String(r.carrier_ids || ''),
+    ent: Number(r.entregados || 0), fal: Number(r.fallidos || 0), inc: Number(r.incompletos || 0), act: fmt_(r.actualizado, 'yyyy-MM-dd HH:mm') }));
+}
+function sumaHist_(l) {
+  const s = l.reduce((a, r) => ({ ent: a.ent + r.ent, fal: a.fal + r.fal + r.inc, dias: a.dias + (r.ent + r.fal + r.inc ? 1 : 0) }), { ent: 0, fal: 0, dias: 0 });
+  s.total = s.ent + s.fal; s.pct = s.total ? round_(s.ent / s.total * 100, 1) : null;
+  s.prom_dia = s.dias ? round_(s.ent / s.dias, 1) : 0;
+  return s;
+}
+function semanaDe_(f) { const l = addDias_(f, -((diaSemana_(f) + 6) % 7)); return [l, addDias_(l, 6)]; }
+function mesDe_(f) { const ini = f.slice(0, 8) + '01'; const sig = addDias_(ini, 32).slice(0, 8) + '01'; return [ini, addDias_(sig, -1)]; }
+
+/**
+ * Jerarquía: últimos JERARQUIA_DIAS días. score = peso × % de éxito (suavizado para pocos envíos) + (1 − peso) × volumen relativo al que más entregó.
+ */
+function jerarquia_(fechaRef) {
+  const dias = Math.max(7, Number(config_('JERARQUIA_DIAS', 30))), w = Math.min(1, Math.max(0, Number(config_('JERARQUIA_PESO_EXITO', 0.6))));
+  const hasta = fechaRef || hoy_(), desde = addDias_(hasta, -dias + 1);
+  const por = {};
+  historialFilas_().filter(r => r.no && r.fecha >= desde && r.fecha <= hasta).forEach(r => (por[r.no] = por[r.no] || []).push(r));
+  const sums = Object.keys(por).map(no => Object.assign({ no_empleado: no }, sumaHist_(por[no])));
+  const tE = sums.reduce((s, x) => s + x.ent, 0), tT = sums.reduce((s, x) => s + x.total, 0);
+  const prior = tT ? tE / tT : 0.9;
+  const maxEnt = Math.max.apply(null, [1].concat(sums.map(x => x.ent)));
+  const lista = sums.filter(x => x.total > 0).map(x => {
+    const suave = (x.ent + 20 * prior) / (x.total + 20);
+    return { no_empleado: x.no_empleado, entregados: x.ent, fallidos: x.fal, pct: x.pct, dias: x.dias, prom_dia: x.prom_dia,
+      score: round_(100 * (w * suave + (1 - w) * x.ent / maxEnt), 1) };
+  }).sort((a, b) => b.score - a.score || b.entregados - a.entregados);
+  lista.forEach((x, i) => { x.rank = i + 1; });
+  return { desde: desde, hasta: hasta, dias: dias, peso_exito: w, lista: lista };
+}
+
+/** Vista de admins: cada repartidor con su día, semana y mes y su lugar en la jerarquía. */
+function historialEntregas_(fecha) {
+  const filas = historialFilas_();
+  const sem = semanaDe_(fecha), mes = mesDe_(fecha);
+  const jer = jerarquia_(fecha);
+  const rk = {}; jer.lista.forEach(x => { rk[x.no_empleado] = x; });
+  const per = rows_('Personal');
+  const claves = {};
+  filas.filter(r => r.fecha >= mes[0] && r.fecha <= mes[1] || r.fecha >= sem[0] && r.fecha <= sem[1]).forEach(r => { claves[r.no || 'C' + r.cid] = r; });
+  per.filter(p => p.estatus !== 'baja' && rolBienvenida_(p) === 'repartidor').forEach(p => { if (!claves[String(p.no_empleado)]) claves[String(p.no_empleado)] = { no: String(p.no_empleado), nombre: p.nombre, cid: '' }; });
+  const lista = Object.keys(claves).map(k => {
+    const ref = claves[k];
+    const mias = filas.filter(r => (ref.no ? r.no === ref.no : !r.no && r.cid === ref.cid));
+    const p = ref.no ? per.find(x => String(x.no_empleado) === ref.no) : null;
+    const en = (a, b) => sumaHist_(mias.filter(r => r.fecha >= a && r.fecha <= b));
+    return { no_empleado: ref.no, nombre: p ? p.nombre : ref.nombre, vinculado: !!ref.no, carrier_ids: ref.cid,
+      dia: en(fecha, fecha), semana: en(sem[0], sem[1]), mes: en(mes[0], mes[1]), jerarquia: rk[ref.no] || null,
+      serie: mias.filter(r => r.fecha > addDias_(fecha, -14) && r.fecha <= fecha).map(r => ({ fecha: r.fecha, ent: r.ent, fal: r.fal + r.inc })) };
+  }).sort((a, b) => ((a.jerarquia ? a.jerarquia.rank : 999) - (b.jerarquia ? b.jerarquia.rank : 999)) || String(a.nombre).localeCompare(String(b.nombre)));
+  const act = filas.map(r => r.act).filter(String).sort().pop() || '';
+  return { fecha: fecha, semana: sem, mes: mes, jerarquia: { dias: jer.dias, desde: jer.desde, hasta: jer.hasta, peso_exito: jer.peso_exito }, actualizado: act,
+    shipday: !!prop_('SHIPDAY_KEY'), repartidores: lista };
+}
+
+/** Lo que ve el repartidor de sí mismo. */
+function desempeno_(no, fecha) {
+  fecha = /^\d{4}-\d{2}-\d{2}$/.test(String(fecha || '')) ? fecha : hoy_();
+  const mias = historialFilas_().filter(r => r.no === String(no));
+  const sem = semanaDe_(fecha), mes = mesDe_(fecha);
+  const jer = jerarquia_(fecha);
+  const yo = jer.lista.find(x => x.no_empleado === String(no)) || null;
+  const en = (a, b) => sumaHist_(mias.filter(r => r.fecha >= a && r.fecha <= b));
+  return { fecha: fecha, dia: en(fecha, fecha), semana: en(sem[0], sem[1]), mes: en(mes[0], mes[1]),
+    jerarquia: yo ? { rank: yo.rank, de: jer.lista.length, score: yo.score, pct: yo.pct, entregados: yo.entregados } : null, dias_jerarquia: jer.dias,
+    serie: mias.filter(r => r.fecha > addDias_(fecha, -14) && r.fecha <= fecha).map(r => ({ fecha: r.fecha, ent: r.ent, fal: r.fal + r.inc })) };
+}
+
+// ───────────────────────── Alertas en producción: fuera de ruta y sin entregar ─────────────────────────
+
+function gpsModo_() { const v = String(config_('GPS_MODO', '')).trim().toLowerCase(); return ['produccion', 'prueba', 'apagado'].indexOf(v) >= 0 ? v : 'produccion'; }
+function asegurarConfig_() {
+  try {
+    const cfg = rows_('ConfigPortal');
+    CONFIG_DEFAULTS.forEach(([k, v, d]) => { if (!cfg.find(r => r.clave === k)) append_('ConfigPortal', { clave: k, valor: v, descripcion: d }); });
+  } catch (e) { console.warn('config', e); }
+}
+function jsonCol_(v) { try { return JSON.parse(v || '{}') || {}; } catch (e) { return {}; } }
+
+/** Distancia en metros de un punto a una polilínea [[lat,lng],...]. */
+function distPolilinea_(p, linea) {
+  if (!linea || !linea.length) return Infinity;
+  const k = 111320, c = Math.cos(p[0] * Math.PI / 180);
+  const xy = q => [(Number(q[1]) - p[1]) * k * c, (Number(q[0]) - p[0]) * k];
+  let best = Infinity, a = xy(linea[0]);
+  if (linea.length === 1) return Math.sqrt(a[0] * a[0] + a[1] * a[1]);
+  for (let i = 1; i < linea.length; i++) {
+    const b = xy(linea[i]);
+    const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy;
+    let t = L ? -(a[0] * dx + a[1] * dy) / L : 0;
+    t = Math.max(0, Math.min(1, t));
+    const x = a[0] + t * dx, y = a[1] + t * dy;
+    best = Math.min(best, Math.sqrt(x * x + y * y));
+    a = b;
+  }
+  return best;
+}
+const mapsTxt_ = (lat, lng) => 'https://maps.google.com/?q=' + round_(lat, 5) + ',' + round_(lng, 5);
+function kmTxt_(m) { return m >= 1000 ? round_(m / 1000, 1) + ' km' : Math.round(m) + ' m'; }
+
+/** Con cada muestra de GPS: ¿el repartidor de cada ruta activa sigue sobre su recorrido? Avisa una vez por salida. */
+function revisarDesvios_(pos, ahora) {
+  if (!ss_().getSheetByName('Rutas')) return 0;
+  rutasTabs_();
+  const fecha = hoy_(), nowMin = hm2min_(fmt_(ahora, 'HH:mm'));
+  const umbral = Math.max(200, Number(config_('GPS_DESVIO_M', 800))), nec = Math.max(1, Number(config_('GPS_DESVIO_MUESTRAS', 2)));
+  const per = rows_('Personal');
+  const chk = checadasPorDia_(fecha, fecha);
+  const avisos = [];
+  rows_('Rutas').filter(x => fmt_(x.fecha, 'yyyy-MM-dd') === fecha && x.estatus === 'activa').forEach(x => {
+    const s = segResumen_(x);
+    if (!s.pendientes || x.estado_tiempo === 'terminada') return;
+    const sal = hm2min_(horaCelda_(x.salida));
+    if (sal != null && nowMin < sal + 10) return;
+    const p = per.find(q => String(q.no_empleado) === String(x.no_empleado));
+    const q = idsShipday_(p).map(id => pos[id]).filter(Boolean)[0];
+    if (!q) return;
+    const g = jsonCol_(x.gps_json);
+    const marcas = (chk[String(x.no_empleado)] || {})[fecha] || [];
+    const comiendo = marcas.length && marcas[marcas.length - 1].tipo === 'SALIDA_COMIDA';
+    const d0 = jsonCol_(x.datos_json), seg = segDe_(x);
+    const dep = d0.deposito || BASE_;
+    const paradas = d0.paradas || [];
+    const pend = paradas.filter(pp => (pp.envios || []).some(n => !(seg[String(n)] && FINAL_[seg[String(n)].e])));
+    const linea = d0.geom && d0.geom.length > 1 ? d0.geom : [dep].concat(paradas.map(pp => [pp.lat, pp.lng]));
+    const pt = [q.lat, q.lng];
+    let dist = distPolilinea_(pt, linea);
+    pend.forEach(pp => { dist = Math.min(dist, havM_(pt, [Number(pp.lat), Number(pp.lng)])); });
+    if (havM_(pt, dep) < 400 || comiendo) dist = 0;
+    if (dist > umbral) {
+      g.f = (g.f || 0) + 1;
+      if (g.f >= nec && !g.a) {
+        g.a = 1; g.desde = fmt_(ahora, 'HH:mm');
+        avisos.push(['ruta_desvio', '🧭 Ruta ' + x.num + ' · ' + primerNombre_(x.nombre) + ' se salió de su ruta',
+          'Está a ' + kmTxt_(dist) + ' del recorrido planeado (desde hace ~' + (g.f * 5) + ' min). Le quedan ' + s.pendientes + ' envío(s). Ubicación: ' + mapsTxt_(q.lat, q.lng), x.ruta_id]);
+      }
+    } else {
+      if (g.a && dist < umbral * 0.6) { g.a = 0; g.regreso = fmt_(ahora, 'HH:mm'); }
+      g.f = 0;
+    }
+    g.d = Math.round(dist); g.t = fmt_(ahora, 'HH:mm'); g.p = [round_(q.lat, 5), round_(q.lng, 5)];
+    update_('Rutas', x._row, { gps_json: JSON.stringify(g) });
+  });
+  avisos.forEach(a => notificarOps_(a[0], a[1], a[2], a[3]));
+  return avisos.length;
+}
+
+/** ¿Lleva RUTA_INACTIVIDAD_MIN sin entregar ni fallar? Avisa a la hora, a las 2 h, etc. (se reinicia con cada entrega). */
+function inactividad_(x, seg, datos, nowMin, s) {
+  const lim = Number(config_('RUTA_INACTIVIDAD_MIN', 60));
+  if (!(lim > 0)) return null;
+  const hs = Object.keys(seg).map(n => seg[n]).filter(v => v && FINAL_[v.e]).map(v => hm2min_(v.h)).filter(v => v != null);
+  const paradas = (datos && datos.paradas) || [];
+  let base, desc;
+  if (hs.length) { base = Math.max.apply(null, hs); desc = 'Su última entrega o fallo fue a las ' + min2hm_(base); }
+  else {
+    const eta1 = hm2min_((paradas[0] || {}).eta), sal = hm2min_(horaCelda_(x.salida));
+    base = eta1 != null ? eta1 : sal;
+    desc = 'No ha entregado nada todavía (su 1ª parada era a las ~' + min2hm_(base) + ')';
+  }
+  if (base == null) return null;
+  const n = Math.floor((nowMin - base) / lim);
+  const st = jsonCol_(x.inact_json);
+  const prev = st.base === base ? Number(st.n || 0) : 0;
+  if (n < 1 || n <= prev) return null;
+  const mins = nowMin - base;
+  return { estado: { base: base, n: n, t: min2hm_(nowMin) },
+    aviso: ['ruta_inactiva', '⏱️ Ruta ' + x.num + ' · ' + primerNombre_(x.nombre) + ' lleva ' + horasTxt_(mins).replace(' h', ' h') + ' sin entregar',
+      desc + '. Le quedan ' + s.pendientes + ' de ' + s.total + ' envíos.' + gpsReciente_(x), x.ruta_id] };
+}
+
+/** Texto corto con lo que dice el GPS de Shipday de los últimos 30 min (si hay). */
+function gpsReciente_(x) {
+  try {
+    if (!ss_().getSheetByName('GpsLog')) return '';
+    const g = jsonCol_(x.gps_json);
+    const ids = idsShipday_(persona_(x.no_empleado));
+    const desde = Date.now() - 35 * 60000;
+    const m = rows_('GpsLog').filter(r => ids.indexOf(String(r.carrier_id)) >= 0 && r.lat !== '' && new Date(r.fecha).getTime() >= desde)
+      .map(r => ({ t: new Date(r.fecha).getTime(), p: [Number(r.lat), Number(r.lng)] })).sort((a, b) => a.t - b.t);
+    if (!m.length) return ' Sin GPS reciente de Shipday.';
+    const u = m[m.length - 1];
+    const mov = Math.max.apply(null, m.map(q => havM_(q.p, u.p)));
+    return (mov < 150 && m.length >= 3 ? ' GPS: detenido ~' + Math.round((u.t - m[0].t) / 60000) + ' min en ' : ' GPS: se está moviendo, va en ') + mapsTxt_(u.p[0], u.p[1]) + (g.a ? ' (fuera de ruta)' : '');
+  } catch (e) { return ''; }
+}
+
+/** Alertas de GPS e inactividad del día (para la pantalla de GPS). */
+function alertasGps_(fecha) {
+  if (!ss_().getSheetByName('Rutas')) return [];
+  return rows_('Rutas').filter(x => fmt_(x.fecha, 'yyyy-MM-dd') === fecha && x.estatus === 'activa').map(x => {
+    const g = jsonCol_(x.gps_json), ina = jsonCol_(x.inact_json);
+    return { ruta_id: x.ruta_id, num: Number(x.num), nombre: x.nombre, fuera: !!g.a, desde: g.desde || '', dist_m: g.d == null ? null : g.d, revisado: g.t || '',
+      pos: g.p || null, sin_entregar_h: ina.n || 0, ina_hora: ina.t || '' };
+  }).sort((a, b) => a.num - b.num);
 }
 
 // ───────────────────────── Acceso a hojas ─────────────────────────

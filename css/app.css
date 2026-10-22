@@ -426,3 +426,17 @@ td .badge { margin: 1px 0; }
 .fl-dot { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; flex: none; background: var(--line); }
 .fl-step.ok .fl-dot { background: var(--ok, #1e8e5a); color: #fff; }
 .fl-step.todo .fl-dot { background: var(--accent, #f5a524); color: #2b1a00; }
+
+/* Domicilio, desempeño y emergencias */
+.casa-map { height: 300px; }
+.barras { display: flex; align-items: flex-end; gap: 4px; height: 90px; margin: 8px 0 2px; }
+.barra { flex: 1; display: flex; flex-direction: column-reverse; align-items: stretch; height: 100%; position: relative; padding-bottom: 14px; }
+.barra .b-ent { background: var(--ok-fg, #16834a); border-radius: 3px 3px 0 0; min-height: 1px; }
+.barra .b-fal { background: var(--err, #c42020); opacity: .8; }
+.barra small { position: absolute; bottom: 0; left: 0; right: 0; text-align: center; font-size: 0.62rem; color: var(--muted); }
+.rank { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; border-radius: 999px; background: var(--line); font-weight: 700; font-size: 0.85rem; }
+.rank.top { background: #f6c945; color: #4a3400; }
+.right { text-align: right; }
+.nw { white-space: nowrap; }
+.contacto { padding: 8px 0; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.contacto:last-of-type { border-bottom: 0; }

@@ -371,11 +371,14 @@ VIEWS.inicio = async function inicio() {
       h('div', { class: 'row between' }, h('h3', {}, '👋 Tu bienvenida'), h('span', { class: 'muted small' }, `${d.bienvenida.hechos} de ${d.bienvenida.total}`)),
       h('div', { class: 'bar' }, h('span', { style: `width:${Math.round(d.bienvenida.hechos / d.bienvenida.total * 100)}%` })),
       h('p', { class: 'small' }, 'Siguiente: ', h('strong', {}, d.bienvenida.siguiente)), h('span', { class: 'btn primary sm' }, 'Continuar')),
+    d.datos_pendientes && h('button', { class: 'banner action warn', onclick: () => perfilView() },
+      h('strong', {}, '📍 Completa tu domicilio y tus 2 contactos de emergencia'), h('span', {}, 'Ponemos tu casa en el mapa y a quién llamar si te pasa algo →')),
     d.ruta && h('button', { class: 'card tap ruta-card', onclick: () => rutaView() },
       h('div', { class: 'row between' }, h('h3', {}, '🗺️ ' + (d.ruta.fecha === d.hoy ? 'Tu ruta de hoy' : 'Tu ruta del ' + fecha(d.ruta.fecha))), h('span', { class: 'chev' }, '›')),
       h('p', { class: 'small' }, h('strong', {}, `${d.ruta.paradas} paradas`), ` · ${d.ruta.envios} envíos · sales ${d.ruta.salida} · terminas aprox ${d.ruta.fin}`),
       h('span', { class: 'btn primary sm' }, 'Ver mapa y paradas')),
     flotillaCard(d.flotilla),
+    desempenoCard(d.desempeno),
     d.recibos_sin_firmar > 0 && h('button', { class: 'banner action warn', onclick: () => go('nomina') },
       h('strong', {}, `🧾 Tienes ${d.recibos_sin_firmar} recibo${d.recibos_sin_firmar > 1 ? 's' : ''} por firmar`), h('span', {}, 'Revísalo y confirma de recibido →')),
 
@@ -457,18 +460,51 @@ function flotillaView(destino) {
 const isAndroid = () => /android/i.test(navigator.userAgent);
 const absUrl = u => new URL(u, location.href).href;
 
-/** Abre la app instalada (Android) o su página de instalación. */
-function abrirApp(a) {
-  const instalar = a.url_instalar ? absUrl(a.url_instalar) : '';
-  if (a.tipo === 'web') return window.open(a.url_abrir || instalar, '_blank', 'noopener');
-  if (isAndroid() && a.android_package) {
-    location.href = `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=${a.android_package};` +
-      (instalar ? `S.browser_fallback_url=${encodeURIComponent(instalar)};` : '') + 'end';
-    return;
-  }
-  const u = a.url_abrir || instalar;
-  if (u) window.open(u, '_blank', 'noopener');
+// ¿Está instalada? En Android no hay forma de preguntarlo en silencio desde una página web: se valida al tocar
+// "Abrir" (si la app abre, la página se oculta; si no está, Chrome regresa a esta página con #app-no-<id>).
+// Lo comprobado se recuerda en este celular y en el servidor (lista/no lista).
+const INST_KEY = 'pp_apps_inst';
+const instLocal = {
+  all() { try { return JSON.parse(localStorage.getItem(INST_KEY) || '{}'); } catch { return {}; } },
+  set(id, v) { try { const o = instLocal.all(); o[id] = v; localStorage.setItem(INST_KEY, JSON.stringify(o)); } catch {} },
+};
+const verificable = a => isAndroid() && !!a.android_package && a.tipo !== 'web';
+function instalada(a) { const o = instLocal.all(); return a.app_id in o ? !!o[a.app_id] : !!a.lista; }
+function marcarInstalada(a, si) {
+  instLocal.set(a.app_id, si);
+  if (!!a.lista !== si) { a.lista = si; api('marcarApp', { app_id: a.app_id, lista: si }).catch(() => {}); }
 }
+/** Lanza la app. Resuelve 'abierta' | 'no_instalada' | 'externa' (sin forma de saber). */
+function lanzarApp(a) {
+  const instalar = a.url_instalar ? absUrl(a.url_instalar) : '';
+  if (a.tipo === 'web') { window.open(a.url_abrir || instalar, '_blank', 'noopener'); return Promise.resolve('externa'); }
+  if (!verificable(a)) { const u = a.url_abrir || instalar; if (u) window.open(u, '_blank', 'noopener'); return Promise.resolve('externa'); }
+  return new Promise(res => {
+    const marca = '#app-no-' + a.app_id;
+    let listo = false;
+    const fin = r => { if (listo) return; listo = true; clearTimeout(t); document.removeEventListener('visibilitychange', vis); window.removeEventListener('hashchange', hc); window.removeEventListener('blur', bl); res(r); };
+    const vis = () => { if (document.hidden) fin('abierta'); };
+    const bl = () => setTimeout(() => { if (document.hidden) fin('abierta'); }, 300);
+    const hc = () => { if (location.hash === marca) { history.replaceState(null, '', location.pathname + location.search); fin('no_instalada'); } };
+    document.addEventListener('visibilitychange', vis); window.addEventListener('hashchange', hc); window.addEventListener('blur', bl);
+    const t = setTimeout(() => fin(document.hidden ? 'abierta' : 'no_instalada'), 4000);
+    const vuelta = location.href.split('#')[0] + marca;
+    location.href = `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=${a.android_package};S.browser_fallback_url=${encodeURIComponent(vuelta)};end`;
+  });
+}
+/** Abrir desde accesos directos o la lista: si no está instalada, ofrece instalarla. */
+async function abrirApp(a, despues) {
+  const r = await lanzarApp(a);
+  if (r === 'abierta') marcarInstalada(a, true);
+  if (r === 'no_instalada') {
+    marcarInstalada(a, false);
+    if (await modal(a.nombre + ' no está instalada', h('p', {}, 'No la encontramos en este celular. Instálala y luego toca "Abrir".'), [['Ahora no', false], ['Instalar', true, 'primary']])) instalarApp(a);
+  }
+  if (despues) despues(r);
+  return r;
+}
+// Si Chrome regresó con la marca (la página se recargó en lugar de solo cambiar el #)
+(() => { const m = location.hash.match(/^#app-no-(.+)$/); if (m) { instLocal.set(decodeURIComponent(m[1]), false); history.replaceState(null, '', location.pathname + location.search); } })();
 
 async function instalarApp(a) {
   if (a.tipo === 'apk') {
@@ -482,6 +518,10 @@ async function instalarApp(a) {
     if (!ok) return;
     const link = h('a', { href: absUrl(a.url_instalar), download: a.nombre.replace(/\W+/g, '') + '.apk' });
     document.body.append(link); link.click(); link.remove();
+    return;
+  }
+  if (isAndroid() && a.android_package && a.tipo === 'playstore') {
+    location.href = `intent://details?id=${a.android_package}#Intent;scheme=market;package=com.android.vending;S.browser_fallback_url=${encodeURIComponent(a.url_instalar || ('https://play.google.com/store/apps/details?id=' + a.android_package))};end`;
     return;
   }
   window.open(a.url_instalar || a.url_abrir, '_blank', 'noopener');
@@ -502,19 +542,29 @@ async function appsView(tab = 'instalar', back) {
   screen('Apps', body, { back });
   let l;
   try { l = await api('apps'); } catch (e) { return fill(body, errorBox(e)); }
+  const boton = a => {
+    if (a.tipo === 'web') return h('button', { class: 'btn sm primary', onclick: () => abrirApp(a) }, 'Abrir');
+    if (instalada(a)) return h('button', { class: 'btn sm primary', onclick: () => abrirApp(a, () => draw()) }, 'Abrir');
+    return h('button', { class: 'btn sm', onclick: () => { instalarApp(a); esperando = a.app_id; } }, a.tipo === 'apk' ? 'Descargar' : 'Instalar');
+  };
+  let esperando = null;
+  // al volver de la Play Store, ofrece validar con "Abrir"
+  const alVolver = () => { if (!document.hidden && esperando && document.body.contains(body)) draw(); };
+  document.addEventListener('visibilitychange', alVolver);
   const draw = () => fill(body,
     segmented([['instalar', 'Instalar'], ['accesos', 'Accesos']], tab, t => { tab = t; draw(); }),
     !l.length ? empty('📱', 'No hay apps para tu puesto.') : tab === 'accesos'
-      ? [accesosGrid(l, false), h('p', { class: 'muted small' }, isAndroid() ? 'Si la app no está instalada, te lleva a instalarla.' : 'En iPhone algunas abren su página en la tienda.')]
-      : [h('p', { class: 'muted small' }, 'Instala cada una, inicia sesión y toca "Ya la tengo".'),
-        l.map(a => h('div', { class: 'app-row' + (a.lista ? ' ok' : '') }, appIcon(a),
-          h('div', { class: 'grow' }, h('strong', {}, a.nombre, a.requerida ? '' : h('small', { class: 'muted' }, ' · opcional')), h('small', { class: 'muted block' }, a.descripcion || '')),
-          h('div', { class: 'app-act' },
-            a.tipo === 'web' ? h('button', { class: 'btn sm', onclick: () => abrirApp(a) }, 'Abrir')
-              : h('button', { class: 'btn sm primary', onclick: () => instalarApp(a) }, a.tipo === 'apk' ? 'Descargar' : 'Instalar'),
-            h('button', { class: 'chk' + (a.lista ? ' on' : ''), onclick: async () => {
-              try { await api('marcarApp', { app_id: a.app_id, lista: !a.lista }); a.lista = !a.lista; draw(); } catch (e) { toast(e.message, 'error'); }
-            } }, a.lista ? '✓ Lista' : 'Ya la tengo'))))]);
+      ? [accesosGrid(l, false), h('p', { class: 'muted small' }, isAndroid() ? 'Si la app no está instalada, te ofrece instalarla.' : 'En iPhone algunas abren su página en la tienda.')]
+      : [h('p', { class: 'muted small' }, isAndroid() ? 'Instala cada una. Cuando ya la tengas, el botón cambia a "Abrir": al tocarlo se comprueba que esté instalada e inicias sesión.' : 'Instala cada una, inicia sesión y toca "Ya la tengo".'),
+        l.map(a => h('div', { class: 'app-row' + (instalada(a) ? ' ok' : '') }, appIcon(a),
+          h('div', { class: 'grow' }, h('strong', {}, a.nombre, a.requerida ? '' : h('small', { class: 'muted' }, ' · opcional')),
+            h('small', { class: 'muted block' }, a.descripcion || ''),
+            verificable(a) && esperando === a.app_id && !instalada(a) && h('button', { class: 'link small', onclick: () => abrirApp(a, () => { esperando = null; draw(); }) }, '¿Ya la instalaste? Toca para comprobar')),
+          h('div', { class: 'app-act' }, boton(a),
+            verificable(a) ? (instalada(a) ? h('span', { class: 'chk on' }, '✓ Instalada') : null)
+              : h('button', { class: 'chk' + (a.lista ? ' on' : ''), onclick: async () => {
+                try { await api('marcarApp', { app_id: a.app_id, lista: !a.lista }); a.lista = !a.lista; instLocal.set(a.app_id, a.lista); draw(); } catch (e) { toast(e.message, 'error'); }
+              } }, a.lista ? '✓ Lista' : 'Ya la tengo'))))]);
   draw();
 }
 
@@ -539,6 +589,9 @@ async function bienvenidaView() {
       h('li', {}, 'Haz tu primera checada poniendo tu dedo.'), h('li', {}, 'Este paso se marca solo cuando llega tu primera checada.')),
       h('button', { class: 'btn', onclick: () => bienvenidaView() }, 'Ya lo hice, revisar')];
     if (x.id === 'notificaciones') return pushCard() || h('button', { class: 'btn', onclick: () => bienvenidaView() }, 'Revisar');
+    if (x.id === 'datos') return h('div', { class: 'row gap8 wrap' },
+      h('button', { class: 'btn primary', onclick: async () => { try { const p = await api('perfil'); domicilioView({ domicilio: p.domicilio, back: () => bienvenidaView() }); } catch (e) { toast(e.message, 'error'); } } }, '🏠 Mi domicilio'),
+      h('button', { class: 'btn', onclick: async () => { try { const p = await api('perfil'); contactosView({ contactos: p.contactos, back: () => bienvenidaView() }); } catch (e) { toast(e.message, 'error'); } } }, '🚨 Contactos'));
     return null;
   };
   fill(body,
@@ -756,10 +809,13 @@ VIEWS.mas = async function mas() {
       ['👋', 'Mi bienvenida', 'Pasos para empezar a trabajar', bienvenidaView],
       isAdmin() && !isPatron() && ['🧭', 'Rutas y reporte', 'Ruteador, rutas publicadas y reporte de Shipday', () => rutasAdminView()],
       isAdmin() && !isPatron() && ['📦', 'Recolecciones', 'Asignación de recolecciones del día', () => recoleccionesView()],
+      isAdmin() && !isPatron() && ['🏆', 'Desempeño de repartidores', 'Entregas por día, semana y mes y jerarquía', () => entregasEquipoView()],
+      isAdmin() && !isPatron() && ['🚨', 'Emergencias', 'Contactos de emergencia y domicilios', () => emergenciasView()],
       state.flotilla && ['🛵', 'Flotilla', state.flotilla.rol === 'repartidor' ? 'Check de moto, gasolina, fallas y cargos' : 'Fallas, reparaciones, documentos y métricas', () => flotillaView()],
       esRepartidor() && ['🗺️', 'Mi ruta', 'Paradas en orden y mapa', () => rutaView()],
+      esRepartidor() && ['📦', 'Mis entregas', 'Entregas por día, semana y mes y tu lugar', () => desempenoView()],
       esRepartidor() && ['📱', 'Apps y accesos', 'Instala y abre tus apps de trabajo', () => appsView('instalar')],
-      ['👤', 'Mis datos', 'RFC, CLABE, horario, antigüedad', perfilView],
+      ['👤', 'Mis datos', 'Domicilio, contactos de emergencia, RFC, CLABE, horario', perfilView],
       ['💳', 'Adeudos y cargos', 'Préstamos, anticipos y cargos de flotilla', adeudosView],
       ['📄', 'Mis documentos', 'Sube tus documentos y ve los de RH', () => documentosView()],
       ['🔔', 'Notificaciones', 'Tu bandeja de avisos', () => bandeja()],
@@ -790,7 +846,9 @@ async function perfilView() {
       h('div', { class: 'card' }, row('Cuenta de nómina', p.clabe ? `${p.banco || ''} ${p.clabe}` : ''), row('Teléfono', p.telefono), row('Correo', p.correo)),
       h('div', { class: 'card' }, row('Hora de entrada', p.horario.entrada), row('Días laborales', p.horario.dias), row('Comida', p.horario.comida ? p.horario.comida + ' min' : ''),
         row('Huella en checador', p.celular_checador ? 'Registrada ✓' : 'Sin checadas aún')),
-      h('p', { class: 'muted small center' }, '¿Algún dato está mal? Avísale a RH para corregirlo.'));
+      section('Domicilio y emergencias'),
+      datosCards(p, { back: perfilView }),
+      h('p', { class: 'muted small center' }, '¿Algún otro dato está mal? Avísale a RH para corregirlo.'));
   } catch (e) { fill(body, errorBox(e)); }
 }
 
@@ -1150,6 +1208,8 @@ async function personaView(p) {
     horarioCampos(p, f),
     h('p', { class: 'muted tiny' }, 'Se copia sola al checador. En el checador ZKTeco registra su huella con este mismo número de empleado.'),
     h('div', { class: 'grid2' }, inp('flotilla_id', 'ID en la flotilla (ej. U-004)', { autocapitalize: 'characters' }), inp('shipday_id', 'ID(s) de repartidor en Shipday (separados por coma)')),
+    sel('moto_tipo', 'Moto que usa (para el ruteador)', [['', 'Sin definir'], ['grande', '🏍️ Grande'], ['chica', '🛵 Chica']]),
+    !nuevo && [section('Domicilio y emergencias'), datosCards(p, { no_empleado: p.no_empleado, nombre: p.nombre, back: () => go('personal') })],
     section('Acceso'),
     h('div', { class: 'grid2' }, sel('rol', 'Rol', [['empleado', 'Empleado'], ['admin', 'Admin (rutas y reporte)'], ['patron', 'Patrón (super admin)']]), sel('estatus', 'Estatus', [['activo', 'Activo'], ['baja', 'Baja']])),
     inp('fecha_baja', 'Fecha de baja', { type: 'date' }),
@@ -1347,7 +1407,9 @@ VIEWS.pmas = function pmas() {
       ['🛵', 'Flotilla', 'Fallas, reparaciones, documentos y métricas de motos', () => flotillaView('dashboard')],
       ['📦', 'Recolecciones', 'Asignación automática de recolecciones del día', () => recoleccionesView()],
       ['🔗', 'Repartidores en Shipday', 'Vincula cada repartidor de Shipday con su empleado', () => shipdayVincularView()],
-      ['🛰️', 'GPS de Shipday (prueba)', 'Qué tan seguido se actualiza la ubicación y paradas detectadas', () => gpsPruebaView()],
+      ['🏆', 'Desempeño de repartidores', 'Entregas por día, semana y mes y jerarquía', () => entregasEquipoView()],
+      ['🚨', 'Emergencias', 'Contactos de emergencia y domicilios', () => emergenciasView()],
+      ['🛰️', 'GPS y alertas', 'Fuera de ruta, sin entregar y paradas detectadas', () => gpsPruebaView()],
       ['📝', 'Solicitudes', 'Justificantes, vacaciones, permisos, anticipos', () => solicitudesAdmin()],
       ['📢', 'Avisos', 'Comunicados por notificación', enviarAvisoView],
       ['💳', 'Adeudos y cargos', 'Préstamos y cargos de flotilla', () => adeudosAdmin()],
@@ -1604,14 +1666,22 @@ async function gpsPruebaView(f) {
   state.tab = 'pmas';
   f = f || isoHoy();
   const body = h('div', {}, loading());
-  screen('GPS de Shipday', body, { back: () => go('pmas'), sub: 'Prueba' });
+  screen('GPS y alertas', body, { back: () => go('pmas') });
   let d;
   try { d = await api('gpsPrueba', { fecha: f }); } catch (e) { return fill(body, errorBox(e)); }
   const TIPO = { detenido: ['Detenido', 'warn'], sin_senal: ['Sin señal (coordenada congelada)', 'err'], base: ['En la base', 'muted'] };
   fill(body,
     h('div', { class: 'row gap8' }, h('input', { type: 'date', value: f, class: 'grow', onchange: e => gpsPruebaView(e.target.value) }),
       h('button', { class: 'btn', onclick: async () => { try { const r = await api('gpsAhora'); toast(`${r.muestras} ubicación(es) guardadas`, 'ok'); gpsPruebaView(f); } catch (e) { toast(e.message, 'error'); } } }, 'Tomar muestra')),
-    h('div', { class: 'banner info small' }, (d.activo ? 'Prueba activa: ' : 'Prueba apagada (GPS_PRUEBA en ConfigPortal). ') + 'cada 5 min se guarda la última ubicación que Shipday tiene de cada repartidor. Sin alertas todavía. "% con cambio" alto = Shipday actualiza seguido; coordenadas que no cambian nada = app cerrada o sin señal.'),
+    h('div', { class: 'banner ' + (d.modo === 'produccion' ? 'info' : 'warn') + ' small' }, d.modo === 'produccion'
+      ? 'En producción: cada 5 min se toma la ubicación de Shipday. Si alguien con ruta activa queda 2 muestras seguidas a más de 800 m de su recorrido, o pasa 1 hora sin entregar ni marcar fallido, les llega un push a admins y patrón. La hora de comida (checada) no cuenta.'
+      : d.modo === 'prueba' ? 'En prueba (GPS_MODO en ConfigPortal): se guarda la ubicación pero no se avisa de salidas de ruta.' : 'Apagado (GPS_MODO en ConfigPortal).'),
+    (d.alertas || []).length > 0 && [section('Rutas de hoy'), d.alertas.map(a => h('div', { class: 'card', style: a.fuera ? 'border-left:5px solid var(--err)' : '' },
+      h('div', {}, h('strong', {}, `Ruta ${a.num} · ${primerNombre(a.nombre)}`), h('small', { class: 'muted block' }, a.revisado ? `GPS ${a.revisado}${a.dist_m != null ? ' · a ' + kmTxt(a.dist_m) + ' de su recorrido' : ''}` : 'Sin GPS todavía')),
+      h('div', { class: 'row gap8 wrap', style: 'margin-top:6px' }, a.fuera ? h('span', { class: 'badge b-err' }, 'Fuera de ruta desde ' + a.desde) : h('span', { class: 'badge b-ok' }, 'En ruta'),
+        a.sin_entregar_h > 0 && h('span', { class: 'badge b-warn' }, `${a.sin_entregar_h} h sin entregar (${a.ina_hora})`),
+        a.pos && h('a', { href: mapsQ(a.pos[0], a.pos[1]), target: '_blank', rel: 'noopener' }, 'mapa'))))],
+    section('Muestras por repartidor'),
     !d.repartidores.length ? empty('🛰️', 'Aún no hay muestras para este día.') : d.repartidores.map(x => h('div', { class: 'card' },
       h('div', { class: 'row between' }, h('strong', {}, x.empleado || x.nombre), h('span', { class: 'muted tiny' }, 'ID ' + x.carrier_id + (x.empleado ? '' : ' · sin vincular'))),
       h('div', { class: 'kpis', style: 'margin-top:6px' },
@@ -1701,6 +1771,286 @@ async function rutasAdminView(f) {
         { t: 'Estado', f: p => { const [l, c] = EST_PARADA[p.estado] || [p.estado, 'muted']; return h('span', { class: 'badge b-' + c }, l + (p.envios > 1 ? ` ${p.entregados}/${p.envios}` : '')); } },
       ], x.detalle || []),
       h('p', { class: 'muted tiny' }, 'Generado ' + x.generado))));
+}
+
+// ═════════ Mis datos: domicilio con pin y contactos de emergencia ═════════
+const ESTADOS_MX = ['Ciudad de México', 'Estado de México', 'Hidalgo', 'Morelos', 'Puebla', 'Tlaxcala', 'Otro'];
+const PARENTESCOS = ['Mamá', 'Papá', 'Esposa', 'Esposo', 'Pareja', 'Hermana', 'Hermano', 'Hija', 'Hijo', 'Tía', 'Tío', 'Abuela', 'Abuelo', 'Prima', 'Primo', 'Suegra', 'Suegro', 'Cuñada', 'Cuñado', 'Amiga', 'Amigo', 'Otro'];
+const enZona = (lat, lng) => lat > 18.3 && lat < 20.7 && lng > -100.7 && lng < -97.7;
+function distM(a, b) { const R = 6371000, t = Math.PI / 180; const x = Math.sin((b[0] - a[0]) * t / 2) ** 2 + Math.cos(a[0] * t) * Math.cos(b[0] * t) * Math.sin((b[1] - a[1]) * t / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(x)); }
+const kmTxt = m => m >= 1000 ? num(m / 1000, 1) + ' km' : Math.round(m) + ' m';
+const mapsQ = (lat, lng) => `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+const telFmt = t => { const d = String(t || '').replace(/\D/g, '').slice(-10); return d.length === 10 ? `${d.slice(0, 2)} ${d.slice(2, 6)} ${d.slice(6)}` : t; };
+const waUrl = t => `https://wa.me/52${String(t || '').replace(/\D/g, '').slice(-10)}`;
+
+let nomUlt = 0;
+async function nominatim(path) {
+  const espera = 1100 - (Date.now() - nomUlt); if (espera > 0) await new Promise(r => setTimeout(r, espera)); // máx. 1 consulta por segundo
+  nomUlt = Date.now();
+  const r = await fetch('https://nominatim.openstreetmap.org/' + path + '&format=jsonv2&addressdetails=1&accept-language=es', { headers: { Accept: 'application/json' } });
+  if (!r.ok) throw new Error('No se pudo consultar el mapa');
+  return r.json();
+}
+function partesNominatim(a = {}) {
+  return { calle: [a.road, a.house_number].filter(Boolean).join(' '), colonia: a.neighbourhood || a.suburb || a.quarter || a.hamlet || '',
+    cp: a.postcode || '', municipio: a.city_district || a.borough || a.municipality || a.town || a.city || a.county || '',
+    estado: /ciudad de m/i.test(a.state || a.city || '') ? 'Ciudad de México' : /^(estado de )?m[eé]xico$/i.test(a.state || '') ? 'Estado de México' : (ESTADOS_MX.find(e => e === a.state) || '') };
+}
+
+/** Domicilio con mapa: el empleado escribe su dirección, se ubica en el mapa y ajusta el pin a su puerta. */
+async function domicilioView(opt = {}) {
+  const back = opt.back || (() => perfilView());
+  const d = Object.assign({ estado: 'Ciudad de México' }, opt.domicilio || {});
+  const body = h('div', {});
+  screen(opt.nombre ? 'Domicilio · ' + primerNombre(opt.nombre) : 'Mi domicilio', body, { back });
+  const f = {};
+  const inp = (k, label, attrs = {}) => { f[k] = h('input', { class: 'input', value: d[k] ?? '', ...attrs }); return h('div', {}, h('label', { class: 'label' }, label), f[k]); };
+  f.estado = h('select', { class: 'input' }, ESTADOS_MX.map(e => h('option', { value: e, selected: d.estado === e || null }, e)));
+  const mapEl = h('div', { class: 'ruta-map casa-map' }, h('div', { class: 'spinner' }));
+  const info = h('div', { class: 'small', style: 'min-height:20px;margin-top:4px' });
+  const aviso = h('div', {});
+  let pin = d.lat != null ? [d.lat, d.lng] : null, geo = null, rev = null, map = null, marker = null, L = null, revT = null;
+  const datosForm = () => ({ calle: f.calle.value.trim(), colonia: f.colonia.value.trim(), cp: f.cp.value.replace(/\D/g, ''), municipio: f.municipio.value.trim(), estado: f.estado.value, referencias: f.referencias.value.trim() });
+  const pintarAviso = () => {
+    const x = datosForm(), w = [];
+    if (pin && geo) { const dd = distM(pin, geo); if (dd > 1500) w.push(`El pin está a ${kmTxt(dd)} de donde el mapa ubica la dirección que escribiste. Revisa que esté en tu casa.`); }
+    if (rev && rev.cp && x.cp.length === 5 && rev.cp.replace(/\D/g, '') !== x.cp) w.push(`Según el mapa, el pin está en el CP ${rev.cp} y escribiste ${x.cp}.`);
+    fill(aviso, w.length ? h('div', { class: 'banner warn small' }, w.map(t => h('div', {}, '⚠️ ' + t))) : null);
+  };
+  const ponerPin = (ll, zoom) => {
+    pin = [+ll[0].toFixed(6), +ll[1].toFixed(6)];
+    if (map) { if (!marker) { marker = L.marker(pin, { draggable: true, autoPan: true }).addTo(map); marker.on('dragend', () => ponerPin([marker.getLatLng().lat, marker.getLatLng().lng])); } else marker.setLatLng(pin); if (zoom) map.setView(pin, zoom); }
+    clearTimeout(revT);
+    fill(info, h('span', { class: 'muted' }, 'Revisando el lugar del pin…'));
+    revT = setTimeout(async () => {
+      try {
+        const r = await nominatim(`reverse?lat=${pin[0]}&lon=${pin[1]}&zoom=18`);
+        rev = partesNominatim(r.address);
+        const llenar = ['colonia', 'cp', 'municipio'].some(k => !f[k].value.trim() && rev[k]);
+        fill(info, h('span', {}, '📍 El pin está en: ', h('strong', {}, [rev.calle, rev.colonia, rev.municipio, rev.cp && 'CP ' + rev.cp].filter(Boolean).join(', ') || 'un lugar sin nombre en el mapa')),
+          llenar && h('button', { class: 'link', style: 'margin-left:6px', onclick: () => { ['colonia', 'cp', 'municipio'].forEach(k => { if (!f[k].value.trim() && rev[k]) f[k].value = rev[k]; }); if (rev.estado) f.estado.value = rev.estado; if (!f.calle.value.trim() && rev.calle) f.calle.value = rev.calle; pintarAviso(); } }, 'Llenar con esto'));
+      } catch { fill(info, h('span', { class: 'muted' }, `📍 ${pin[0]}, ${pin[1]}`)); rev = null; }
+      pintarAviso();
+    }, 700);
+  };
+  const buscar = async () => {
+    const x = datosForm();
+    if (!x.calle && !x.cp) return toast('Escribe tu calle y número o tu código postal', 'error');
+    try {
+      let r = [];
+      await busy('Buscando en el mapa…', async () => {
+        const base = 'search?countrycodes=mx&limit=1';
+        if (x.calle) r = await nominatim(`${base}&street=${encodeURIComponent(x.calle)}${x.cp ? '&postalcode=' + x.cp : ''}${x.municipio ? '&city=' + encodeURIComponent(x.municipio) : ''}&state=${encodeURIComponent(x.estado === 'Otro' ? '' : x.estado)}`);
+        if (!r.length && x.calle) r = await nominatim(`${base}&q=${encodeURIComponent([x.calle, x.colonia, x.municipio, x.estado !== 'Otro' && x.estado, x.cp].filter(Boolean).join(', '))}`);
+        if (!r.length && x.cp) { r = await nominatim(`${base}&postalcode=${x.cp}`); if (r.length) r[0].soloCp = true; }
+      });
+      if (!r.length) return toast('No encontré esa dirección. Mueve el mapa y toca tu casa.', 'error', 5000);
+      geo = [+r[0].lat, +r[0].lon];
+      if (!enZona(geo[0], geo[1])) { geo = null; return toast('Esa dirección quedó fuera de la zona; revisa estado y CP.', 'error', 5000); }
+      ponerPin(geo, r[0].soloCp ? 15 : 18);
+      toast(r[0].soloCp ? 'No encontré la calle exacta: te dejé en tu código postal. Mueve el pin a tu casa.' : 'Listo. Ajusta el pin justo en tu puerta.', 'info', 5000);
+    } catch (e) { toast(e.message, 'error'); }
+  };
+  const miUbicacion = () => {
+    if (!navigator.geolocation) return toast('Tu celular no permite ubicarte desde aquí', 'error');
+    toast('Buscando tu ubicación…', 'info', 2500);
+    navigator.geolocation.getCurrentPosition(p => {
+      if (!enZona(p.coords.latitude, p.coords.longitude)) return toast('Tu ubicación quedó fuera de la zona. Pon el pin a mano.', 'error');
+      ponerPin([p.coords.latitude, p.coords.longitude], 18);
+      if (p.coords.accuracy > 80) toast(`Tu ubicación tiene ±${Math.round(p.coords.accuracy)} m de error: acomoda el pin en tu puerta.`, 'info', 5000);
+    }, () => toast('No pude obtener tu ubicación (revisa el permiso de ubicación)', 'error'), { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+  };
+  const guardar = async () => {
+    const x = datosForm();
+    if (x.calle.length < 4) return toast('Escribe tu calle y número', 'error');
+    if (!/^\d{5}$/.test(x.cp)) return toast('El código postal debe tener 5 dígitos', 'error');
+    if (!x.colonia || !x.municipio) return toast('Falta la colonia o la alcaldía/municipio', 'error');
+    if (!pin) return toast('Coloca el pin de tu casa en el mapa (toca "Buscar en el mapa" o toca el mapa)', 'error', 5000);
+    if (!geo) { try { const r = await nominatim(`search?countrycodes=mx&limit=1&q=${encodeURIComponent([x.calle, x.colonia, x.municipio, x.cp].join(', '))}`); if (r.length) geo = [+r[0].lat, +r[0].lon]; } catch {} }
+    const dist = geo ? Math.round(distM(pin, geo)) : '';
+    if (dist !== '' && dist > 1500 && !await confirmar('¿El pin está bien?', `El pin está a ${kmTxt(dist)} de donde el mapa ubica la dirección que escribiste. Si el pin está en tu casa, guárdalo así.`, 'Sí, está en mi casa')) return;
+    try {
+      const data = { domicilio: Object.assign(x, { lat: pin[0], lng: pin[1], dist_m: dist }) };
+      if (opt.no_empleado) data.no_empleado = opt.no_empleado;
+      await busy('Guardando…', () => api(opt.no_empleado ? 'guardarDatosDe' : 'guardarMisDatos', data));
+      toast('Domicilio guardado', 'ok'); back();
+    } catch (e) { toast(e.message, 'error', 5000); }
+  };
+  fill(body,
+    h('p', { class: 'muted small' }, opt.no_empleado ? 'Domicilio del empleado. El pin debe quedar en la puerta de su casa.' : 'Lo usamos para darte rutas que terminen cerca de tu casa y para cualquier emergencia. Solo lo ven RH y los coordinadores.'),
+    inp('calle', 'Calle y número (exterior e interior)', { placeholder: 'Ej. Av. Central 123 int. 4', autocomplete: 'address-line1' }),
+    h('div', { class: 'grid2' }, inp('colonia', 'Colonia'), inp('cp', 'Código postal', { inputmode: 'numeric', maxlength: 5, autocomplete: 'postal-code' })),
+    h('div', { class: 'grid2' }, inp('municipio', 'Alcaldía o municipio'), h('div', {}, h('label', { class: 'label' }, 'Estado'), f.estado)),
+    inp('referencias', 'Referencias (opcional)', { placeholder: 'Entre calles, color de la casa, portón…' }),
+    h('div', { class: 'row gap8 wrap', style: 'margin-top:10px' }, h('button', { class: 'btn', onclick: buscar }, '🔎 Buscar en el mapa'), !opt.no_empleado && h('button', { class: 'btn', onclick: miUbicacion }, '📍 Estoy en mi casa')),
+    mapEl, info, aviso,
+    h('p', { class: 'muted tiny' }, 'Arrastra el pin o toca el mapa para dejarlo justo en la puerta de la casa.'),
+    h('button', { class: 'btn primary block', onclick: guardar }, 'Guardar domicilio'));
+  f.cp.addEventListener('input', () => { f.cp.value = f.cp.value.replace(/\D/g, '').slice(0, 5); pintarAviso(); });
+  try {
+    L = await loadLeaflet();
+    mapEl.replaceChildren();
+    map = L.map(mapEl, { zoomControl: true }).setView(pin || [19.4326, -99.1332], pin ? 18 : 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+    map.on('click', e => ponerPin([e.latlng.lat, e.latlng.lng]));
+    if (pin) ponerPin(pin);
+    setTimeout(() => map.invalidateSize(), 200);
+  } catch (e) { fill(mapEl, h('p', { class: 'muted small center', style: 'padding:20px' }, e.message)); }
+}
+
+/** Dos contactos de emergencia: nombre, teléfono y parentesco. */
+function contactosView(opt = {}) {
+  const back = opt.back || (() => perfilView());
+  const cs = [0, 1].map(i => Object.assign({ nombre: '', telefono: '', parentesco: '' }, (opt.contactos || [])[i] || {}));
+  const campos = cs.map((c, i) => {
+    const enLista = !c.parentesco || PARENTESCOS.includes(c.parentesco);
+    const x = {
+      nombre: h('input', { class: 'input', value: c.nombre, placeholder: 'Nombre y apellido', autocomplete: 'off' }),
+      tel: h('input', { class: 'input', value: c.telefono ? telFmt(c.telefono) : '', type: 'tel', inputmode: 'tel', placeholder: '55 1234 5678' }),
+      par: h('select', { class: 'input' }, h('option', { value: '' }, '— Elige —'), PARENTESCOS.map(p => h('option', { value: p, selected: (enLista ? c.parentesco === p : p === 'Otro') || null }, p))),
+      otro: h('input', { class: 'input', value: enLista ? '' : c.parentesco, placeholder: '¿Qué es de ti?', style: enLista ? 'display:none' : '' }),
+    };
+    x.par.onchange = () => { x.otro.style.display = x.par.value === 'Otro' ? '' : 'none'; };
+    const pick = 'contacts' in navigator && navigator.contacts && 'select' in navigator.contacts && h('button', { class: 'btn sm', onclick: async () => {
+      try { const [k] = await navigator.contacts.select(['name', 'tel'], { multiple: false }); if (!k) return; if (k.name && k.name[0]) x.nombre.value = k.name[0]; if (k.tel && k.tel[0]) x.tel.value = telFmt(k.tel[0]); } catch {}
+    } }, '📇 Elegir de mis contactos');
+    x.el = h('div', { class: 'card' }, h('div', { class: 'row between' }, h('h3', {}, `Contacto ${i + 1}`), pick || null),
+      h('label', { class: 'label' }, 'Nombre completo'), x.nombre, h('div', { class: 'grid2' }, h('div', {}, h('label', { class: 'label' }, 'Teléfono (10 dígitos)'), x.tel),
+        h('div', {}, h('label', { class: 'label' }, 'Parentesco'), x.par, x.otro)));
+    return x;
+  });
+  const guardar = async () => {
+    const contactos = campos.map(x => ({ nombre: x.nombre.value.trim(), telefono: x.tel.value.replace(/\D/g, '').slice(-10), parentesco: x.par.value === 'Otro' ? (x.otro.value.trim() || '') : x.par.value }));
+    for (const [i, c] of contactos.entries()) {
+      if (c.nombre.split(/\s+/).length < 2) return toast(`Contacto ${i + 1}: escribe nombre y apellido`, 'error');
+      if (c.telefono.length !== 10) return toast(`Contacto ${i + 1}: el teléfono debe tener 10 dígitos`, 'error');
+      if (!c.parentesco) return toast(`Contacto ${i + 1}: elige el parentesco`, 'error');
+    }
+    if (contactos[0].telefono === contactos[1].telefono) return toast('Pon a dos personas distintas (los teléfonos son iguales)', 'error');
+    try {
+      const data = { contactos }; if (opt.no_empleado) data.no_empleado = opt.no_empleado;
+      await busy('Guardando…', () => api(opt.no_empleado ? 'guardarDatosDe' : 'guardarMisDatos', data));
+      toast('Contactos guardados', 'ok'); back();
+    } catch (e) { toast(e.message, 'error', 5000); }
+  };
+  screen(opt.nombre ? 'Emergencias · ' + primerNombre(opt.nombre) : 'Contactos de emergencia', h('div', {},
+    h('p', { class: 'muted small' }, 'Dos personas a quienes llamar si te pasa algo en la calle, para avisarles cómo estás. Que sean de confianza y que contesten.'),
+    campos.map(x => x.el),
+    h('button', { class: 'btn primary block', onclick: guardar }, 'Guardar contactos')), { back });
+}
+
+function datosCards(p, opt = {}) {
+  const dm = p.domicilio || {}, cs = p.contactos || [];
+  const ed = Object.assign({}, opt);
+  return [
+    h('div', { class: 'card' },
+      h('div', { class: 'row between' }, h('h3', {}, '🏠 Domicilio'), h('button', { class: 'btn sm', onclick: () => domicilioView(Object.assign({ domicilio: dm }, ed)) }, dm.texto ? 'Editar' : 'Agregar')),
+      dm.texto ? [h('p', { class: 'small' }, dm.texto), dm.referencias && h('p', { class: 'muted small' }, dm.referencias),
+        dm.lat != null && h('a', { class: 'small', href: mapsQ(dm.lat, dm.lng), target: '_blank', rel: 'noopener' }, '📍 Ver el pin en el mapa'),
+        dm.dist_m > 1500 && h('p', { class: 'tiny late' }, `El pin está a ${kmTxt(dm.dist_m)} de la dirección escrita.`)]
+        : h('p', { class: 'small late' }, 'Falta el domicilio con su pin en el mapa.')),
+    h('div', { class: 'card' },
+      h('div', { class: 'row between' }, h('h3', {}, '🚨 Contactos de emergencia'), h('button', { class: 'btn sm', onclick: () => contactosView(Object.assign({ contactos: cs }, ed)) }, cs.some(c => c.nombre) ? 'Editar' : 'Agregar')),
+      cs.some(c => c.nombre) ? cs.map(c => c.nombre && h('div', { class: 'kv' }, h('span', {}, h('strong', {}, c.nombre), h('small', { class: 'muted block' }, c.parentesco)),
+        h('a', { href: 'tel:' + c.telefono }, telFmt(c.telefono)))) : h('p', { class: 'small late' }, 'Faltan los 2 contactos de emergencia.')),
+  ];
+}
+
+// ═════════ Desempeño (entregas exitosas por día, semana y mes) ═════════
+const pctTxt = v => v == null ? '—' : num(v, 1) + '%';
+function serieBarras(serie) {
+  if (!serie || !serie.length) return null;
+  const mx = Math.max(1, ...serie.map(s => s.ent + s.fal));
+  return h('div', { class: 'barras' }, serie.map(s => h('div', { class: 'barra', title: `${fecha(s.fecha)}: ${s.ent} entregados, ${s.fal} fallidos` },
+    h('span', { class: 'b-fal', style: `height:${s.fal / mx * 100}%` }), h('span', { class: 'b-ent', style: `height:${s.ent / mx * 100}%` }), h('small', {}, Number(s.fecha.slice(8))))));
+}
+function desempenoCard(d) {
+  if (!d) return null;
+  const j = d.jerarquia;
+  return h('button', { class: 'card tap', onclick: () => desempenoView() },
+    h('div', { class: 'row between' }, h('h3', {}, '📦 Tus entregas'), j ? h('span', { class: 'badge b-info' }, `Lugar ${j.rank} de ${j.de}`) : h('span', { class: 'chev' }, '›')),
+    h('div', { class: 'kpis', style: 'margin-top:6px' }, kpi('Hoy', d.dia.ent, d.dia.fal ? `${d.dia.fal} fallido(s)` : 'entregados', 'ok'),
+      kpi('Semana', d.semana.ent, pctTxt(d.semana.pct) + ' de éxito', d.semana.pct != null && d.semana.pct < 90 ? 'warn' : '')));
+}
+async function desempenoView(f) {
+  const prev = state.tab;
+  const body = h('div', {}, loading());
+  screen('Mis entregas', body, { back: () => go(prev === 'mas' ? 'mas' : 'inicio') });
+  let d;
+  try { d = (await cached('desempeno', f ? { fecha: f } : {}, live(() => desempenoView(f)))).data; } catch (e) { return fill(body, errorBox(e)); }
+  const j = d.jerarquia;
+  fill(body,
+    h('div', { class: 'kpis' },
+      kpi('Hoy', d.dia.ent, d.dia.fal ? `${d.dia.fal} fallido(s) · ${pctTxt(d.dia.pct)}` : 'entregados', 'ok'),
+      kpi('Esta semana', d.semana.ent, `${pctTxt(d.semana.pct)} de éxito`),
+      kpi('Este mes', d.mes.ent, `${pctTxt(d.mes.pct)} · ${d.mes.dias} día(s)`),
+      kpi('Tu lugar', j ? `${j.rank} de ${j.de}` : '—', j ? `${num(j.score, 1)} puntos` : 'sin entregas aún', j && j.rank <= 3 ? 'ok' : '')),
+    section('Últimos 14 días'),
+    d.serie.length ? h('div', { class: 'card' }, serieBarras(d.serie), h('p', { class: 'muted tiny' }, '🟩 entregados · 🟥 fallidos o incompletos')) : empty('📦', 'Aún no hay entregas registradas.'),
+    h('div', { class: 'card soft' }, h('h3', {}, '¿Cómo se calcula tu lugar?'),
+      h('p', { class: 'small' }, `Cuenta los últimos ${d.dias_jerarquia} días en Shipday: tu % de entregas exitosas y cuántos paquetes entregaste. Los primeros lugares tienen preferencia al repartir las rutas (por ejemplo, rutas que terminan cerca de su casa).`)));
+}
+
+async function entregasEquipoView(f, per = 'dia') {
+  state.tab = modoPatron() ? 'pmas' : 'mas';
+  f = f || isoHoy();
+  const body = h('div', {}, loading());
+  screen('Desempeño de repartidores', body, { back: () => go(state.tab) });
+  let d;
+  try { d = (await cached('historialEntregas', { fecha: f }, live(() => entregasEquipoView(f, per)))).data; } catch (e) { return fill(body, errorBox(e, () => entregasEquipoView(f, per))); }
+  const actualizar = async (desde) => {
+    try { const r = await busy('Consultando Shipday…', () => api('historialActualizar', { desde: desde || f, hasta: f })); toast(`${r.entregados} entregas en ${r.filas} registro(s)` + (r.sin_vincular ? ` · ${r.sin_vincular} sin vincular` : ''), 'ok', 5000); entregasEquipoView(f, per); }
+    catch (e) { toast(e.message, 'error', 6000); }
+  };
+  const etiqueta = { dia: fecha(f), semana: `${fecha(d.semana[0])} – ${fecha(d.semana[1])}`, mes: `${fecha(d.mes[0])} – ${fecha(d.mes[1])}` }[per];
+  const lista = d.repartidores.filter(r => r.vinculado || r[per].total);
+  fill(body,
+    h('div', { class: 'row gap8' }, h('input', { type: 'date', value: f, class: 'grow input sm', onchange: e => entregasEquipoView(e.target.value, per) }),
+      h('button', { class: 'btn sm', onclick: () => actualizar() }, '↻ Shipday')),
+    segmented([['dia', 'Día'], ['semana', 'Semana'], ['mes', 'Mes']], per, v => entregasEquipoView(f, v)),
+    !d.shipday && h('div', { class: 'banner warn' }, 'Falta la key de Shipday (ruteador → Claves del servidor).'),
+    h('p', { class: 'muted small' }, `${etiqueta} · lugar según los últimos ${d.jerarquia.dias} días (${Math.round(d.jerarquia.peso_exito * 100)}% éxito, ${Math.round((1 - d.jerarquia.peso_exito) * 100)}% volumen)` + (d.actualizado ? ` · actualizado ${fechaHora(d.actualizado)}` : '')),
+    lista.length ? lista.map(r => { const x = r[per], j = r.jerarquia;
+      return h('details', { class: 'card' },
+        h('summary', { class: 'row between' }, h('span', { class: 'row gap8' }, h('span', { class: 'rank' + (j && j.rank <= 3 ? ' top' : '') }, j ? j.rank : '–'),
+          h('span', {}, h('strong', {}, r.nombre), !r.vinculado && h('small', { class: 'late block' }, 'Sin vincular · Shipday ' + r.carrier_ids))),
+          h('span', { class: 'right' }, h('strong', {}, x.ent), h('small', { class: 'muted block' }, x.total ? pctTxt(x.pct) : 'sin envíos'))),
+        h('div', { class: 'kpis', style: 'margin-top:8px' }, kpi('Entregados', x.ent, `${x.dias} día(s)`, 'ok'), kpi('Fallidos', x.fal, 'o incompletos', x.fal ? 'err' : ''),
+          kpi('Éxito', pctTxt(x.pct), x.dias ? `${num(x.prom_dia, 1)} por día` : '', x.pct != null && x.pct < 90 ? 'warn' : ''), kpi('Puntos', j ? num(j.score, 1) : '—', j ? `${j.entregados} ent. · ${pctTxt(j.pct)}` : '')),
+        serieBarras(r.serie)); })
+      : empty('📦', 'No hay entregas registradas. Toca "↻ Shipday" para traerlas.'),
+    isPatron() && h('button', { class: 'btn block', onclick: () => actualizar(d.mes[0] < addDiasIso(f, -30) ? addDiasIso(f, -30) : d.mes[0]) }, 'Recalcular el mes desde Shipday'),
+    h('p', { class: 'muted tiny' }, 'Se guarda solo todos los días a las 23:00 y se vuelve a cerrar en la mañana. Las recolecciones no cuentan.'));
+}
+const addDiasIso = (f, n) => { const d = new Date(f + 'T12:00:00'); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+
+// ═════════ Emergencias (admins y patrón) ═════════
+async function emergenciasView(q = '') {
+  state.tab = modoPatron() ? 'pmas' : 'mas';
+  const body = h('div', {}, loading());
+  screen('Emergencias', body, { back: () => go(state.tab) });
+  let l;
+  try { l = (await cached('emergencias', {}, live(() => emergenciasView(q)))).data; } catch (e) { return fill(body, errorBox(e)); }
+  const lista = h('div', {});
+  const pintar = () => {
+    const t = q.toLowerCase();
+    const sel = l.filter(x => !t || x.nombre.toLowerCase().includes(t) || String(x.no_empleado) === t);
+    fill(lista, sel.map(x => { const cs = x.contactos.filter(c => c.nombre);
+      return h('div', { class: 'card' },
+        h('div', { class: 'row between' }, h('span', {}, h('strong', {}, x.nombre), h('small', { class: 'muted block' }, `No. ${x.no_empleado}${x.puesto ? ' · ' + x.puesto : ''}`)),
+          x.telefono && h('a', { class: 'btn sm nw', href: 'tel:' + x.telefono }, '📞 ' + telFmt(x.telefono))),
+        cs.length ? cs.map(c => h('div', { class: 'contacto' }, h('div', {}, h('strong', {}, c.nombre), h('small', { class: 'muted' }, ' · ' + c.parentesco)),
+          h('div', { class: 'row gap8 wrap' }, h('a', { class: 'btn sm primary nw', href: 'tel:' + c.telefono }, '📞 ' + telFmt(c.telefono)), h('a', { class: 'btn sm nw', href: waUrl(c.telefono), target: '_blank', rel: 'noopener' }, 'WhatsApp'))))
+          : h('p', { class: 'small late' }, 'Sin contactos de emergencia registrados.'),
+        x.domicilio.texto ? h('p', { class: 'small muted', style: 'margin-top:6px' }, '🏠 ', x.domicilio.texto, ' ', x.domicilio.lat != null && h('a', { href: mapsQ(x.domicilio.lat, x.domicilio.lng), target: '_blank', rel: 'noopener' }, 'mapa'))
+          : h('p', { class: 'tiny late' }, 'Sin domicilio.')); }));
+  };
+  const faltan = l.filter(x => x.contactos.filter(c => c.nombre).length < 2).length;
+  fill(body,
+    h('input', { class: 'input', type: 'search', placeholder: 'Buscar empleado…', value: q, oninput: e => { q = e.target.value; pintar(); } }),
+    faltan > 0 && h('div', { class: 'banner warn small' }, `${faltan} empleado(s) sin sus 2 contactos de emergencia. Les aparece el aviso en su Inicio.`),
+    lista);
+  pintar();
 }
 
 // ═════════ Arranque ═════════

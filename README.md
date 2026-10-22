@@ -107,9 +107,28 @@ node test/ui.test.js carpeta  # recorre la app en modo demo y toma capturas
 - `RECOLECCION_MODO`: `aprobacion` (se proponen y se aprueban en Más → Recolecciones; al aprobar se asigna en Shipday) · `automatico` · `apagado`.
 - Si Shipday no trae coordenadas del origen se geocodifica la dirección (Google Maps de Apps Script) y se guarda por cliente.
 
-## GPS de Shipday (prueba)
+## GPS y alertas (producción)
 
-- Cada 5 min se guarda en *GpsLog* la última ubicación conocida de cada repartidor (`/carriers`). Sin alertas. Más → GPS de Shipday muestra por repartidor qué tan seguido cambia y las paradas de 15+ min (detenido / sin señal / en la base). Se apaga con `GPS_PRUEBA = NO`.
+- `GPS_MODO = produccion` (por defecto): cada 5 min se guarda en *GpsLog* la ubicación de Shipday (`/carriers`) y se compara con la ruta activa de cada repartidor. Si queda `GPS_DESVIO_MUESTRAS` (2) muestras seguidas a más de `GPS_DESVIO_M` (800 m) del recorrido planeado (y lejos de sus paradas pendientes), push a admins y patrón con la liga al mapa. Un aviso por salida; se rearma al volver a la ruta. No cuenta si está en la base o si su última checada es *salir a comer*.
+- **Sin entregar:** en el seguimiento de cada 10 min, si pasan `RUTA_INACTIVIDAD_MIN` (60) sin entregar ni marcar fallido (desde la última entrega, o desde la hora estimada de su 1ª parada), push con lo que dice el GPS (detenido / en movimiento). Se repite cada hora y se reinicia con cada entrega.
+- `prueba` = solo guarda ubicaciones · `apagado` = nada. Más → GPS y alertas muestra el estado de cada ruta del día.
+
+## Domicilio y contactos de emergencia
+
+- Mis datos → Domicilio: calle, colonia, CP, alcaldía/municipio y estado; se busca en el mapa (OpenStreetMap/Nominatim) o con “Estoy en mi casa” y el empleado arrastra el pin a su puerta. Se valida número exterior, CP de 5 dígitos que corresponda al estado (CDMX 01000–16999, Edo. Méx. 50000–57999), pin dentro de la zona y se avisa si el pin queda a más de 1.5 km de la dirección escrita o en otro CP.
+- 2 contactos de emergencia (nombre y apellido, teléfono de 10 dígitos distinto al suyo y entre ellos, parentesco). Se guardan en *Personal* (`domicilio`, `dom_lat`, `dom_lng`, `emer1_*`, `emer2_*`). Paso nuevo en la bienvenida y aviso en Inicio mientras falten. Admins y patrón: Más → Emergencias (llamar / WhatsApp) y el expediente.
+
+## Historial de entregas y jerarquía
+
+- *HistorialEntregas*: por repartidor y día, entregados / fallidos / incompletos según Shipday (`POST /orders/query`, sin recolecciones; se cuenta el día en que se entregó o falló). Se guarda solo a las 23:00 y se vuelve a cerrar el día anterior en la mañana. Para llenar los últimos 30 días: ejecutar `historialInicial` en el editor.
+- Jerarquía (últimos `JERARQUIA_DIAS`=30 días): puntos = `JERARQUIA_PESO_EXITO` (0.6) × % de éxito (suavizado para quien tiene pocos envíos) + 0.4 × volumen relativo al que más entregó.
+- El repartidor ve *Mis entregas* (día, semana, mes, su lugar); admins y patrón *Desempeño de repartidores*.
+
+## Asistencia y preasignación en el ruteador
+
+- El ruteador lee del checador quién checó entrada hoy (o quién tiene turno si es otra fecha), el pin de su casa, su tipo de moto (expediente → *Moto que usa*) y su lugar en la jerarquía.
+- Si hay más motos cargadas que repartidores con asistencia, pide confirmación antes de generar (Cancelar / Ajustar / Generar igual).
+- Al terminar sugiere quién lleva cada ruta: en orden de jerarquía cada repartidor toma la ruta que termina más cerca de su casa; moto chica solo rutas de moto chica. Se puede cambiar y hay que tocar *Aprobar asignación* para publicar (se guarda quién estaba sugerido y quién aprobó).
 
 ## Flota y zonas (ruteador)
 

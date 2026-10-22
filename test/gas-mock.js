@@ -51,6 +51,7 @@ class Range {
   getDisplayValues() { return this.getValues().map(r => r.map(display)); }
   setValues(v) { v.forEach((row, i) => row.forEach((x, j) => this.sh.set(this.r + i, this.c + j, x))); return this; }
   setValue(v) { this.sh.set(this.r, this.c, v); return this; }
+  clearContent() { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sh.set(this.r + i, this.c + j, ''); return this; }
   setNumberFormat(f) { for (let j = 0; j < this.nc; j++) this.sh.fmt[this.c + j] = f; return this; }
   setFontWeight() { return this; } setBackground() { return this; } setFontColor() { return this; }
   getDataValidation() { return this.sh.validation; }
@@ -81,7 +82,7 @@ function makeEnv({ now, maestro, flotilla, gmail }) {
   const blob = (data, mime, name) => ({ data, mime, name, getAs() { return blob(data, 'application/pdf', name); }, setName(n) { this.name = n; return this; }, getBytes: () => Buffer.from(String(data)), getDataAsString: () => String(data) });
 
   const ctx = {
-    console: { log: (...a) => process.env.VERBOSE && console.log(...a), warn() {}, error: (...a) => process.env.VERBOSE && console.error(...a) }, Date: FakeDate, Math, JSON, Number, String, Object, Array, RegExp, Error, isNaN, Buffer, Intl,
+    console: { log: (...a) => process.env.VERBOSE && console.log(...a), warn: (...a) => process.env.VERBOSE && console.warn(...a), error: (...a) => process.env.VERBOSE && console.error(...a) }, Date: FakeDate, Math, JSON, Number, String, Object, Array, RegExp, Error, isNaN, Buffer, Intl,
     SpreadsheetApp: {
       openById: (id) => (id === 'MAESTRO' || id.startsWith('1U6') ? maestro : flotilla),
       flush() {},

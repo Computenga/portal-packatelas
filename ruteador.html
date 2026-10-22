@@ -58,6 +58,7 @@ a{color:var(--info)}
 .alert.ok{background:var(--ok-bg);color:var(--ok)}
 .alert.info{background:var(--info-bg);color:var(--info)}
 .alert b{font-weight:700}
+.sug{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.35}
 .alert .big{font-size:20px;font-weight:700;display:block;margin-bottom:4px}
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
 .chip{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px;min-width:110px}
@@ -145,6 +146,7 @@ details.route li span{color:var(--muted)}
         <div><label>Motos chicas</label><input type="number" id="small" min="0" value="0"></div>
         <div><label>Total</label><input type="text" id="totalMotos" value="5 repartidores" disabled></div>
       </div>
+      <div id="asisBox" class="hint" style="font-size:13px"></div>
       <div class="row">
         <div><label>Motos chicas pueden ir a</label><select id="smallZone"><option value="cdmx">Solo CDMX</option><option value="todo">CDMX y Edo. Méx.</option></select></div>
         <div><label>Agrupar rutas por</label><select id="grp"><option value="estado">Estado (CDMX / Edo. Méx.)</option><option value="alcaldia">Alcaldía / municipio</option><option value="">Sin agrupar</option></select></div>
@@ -737,6 +739,7 @@ async function optimize(){
   const warnings=[];
   try{
     if(!S.rows.length)throw new Error('Primero sube el Excel con los envíos.');
+    if(!await confirmarMotos())return;
     const cfg=readCfg();
     if(!isFinite(cfg.depot.lat)||!isFinite(cfg.depot.lng))throw new Error('Revisa las coordenadas del origen.');
     if(!(cfg.end>cfg.start))throw new Error('La hora máxima de término debe ser después de la hora de salida.');
@@ -864,6 +867,7 @@ async function optimize(){
     if(cfg.small&&[...(schedN||schedK)].some(r=>r.chica&&r.stops.some(o=>restr.has(stops.indexOf(o.st)+1))))warnings.push('Alguna moto chica quedó con una parada difícil porque no hubo otra opción; revisa las rutas marcadas.');
     S.result={restrList,cfg,K,N,feasibleK,planK:{sched:schedK},planN:schedN?{sched:schedN}:null,maxK,limit,unreachStops,warnings,trafficSrc,fewer,parcelCount,nStops:n,ttCalls,noPlanN:!feasibleK&&!planN};
     S.view=schedN?'needed':'given';
+    prepararAsignacion('given',schedK);if(schedN)prepararAsignacion('needed',schedN);
     renderResult();setStatus(`Listo · ${hhmm(new Date())}`+((ttCalls+ttCallsPre)?` · ${ttCalls+ttCallsPre} consultas TomTom`:''));setProg(1);
   }catch(err){
     setStatus('');setProg(0);
@@ -903,9 +907,9 @@ function renderResult(){
   <div class="hint" style="margin-bottom:8px">Tiempos: ${esc(R.trafficSrc)}</div>
   <div class="btns" style="margin-bottom:10px"><button id="pubBtn" style="background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600">Publicar en la super app</button><button id="printAll">Imprimir tickets (todas)</button><button id="pdfAll">PDF 80 mm (todas)</button><button id="xlsOut">Excel de rutas</button></div>
   <div class="hint" style="margin-bottom:6px">Ordenadas por <b>prioridad de despacho</b>: la ruta 1 es la más larga y debe salir primero; la última es la más corta y puede salir al final. *Termina = saliendo a la hora de salida indicada.</div>
-  <div class="tblwrap"><table class="tbl"><thead><tr><th>Prioridad</th><th>Moto · zona</th><th>Paradas</th><th>Envíos</th><th>Km</th><th>Duración</th><th>Salir a más tardar</th><th>Termina*</th><th>Holgura</th><th>Estado</th><th>Repartidor</th><th></th></tr></thead><tbody>`;
+  ${asigBanner()}<div class="tblwrap"><table class="tbl"><thead><tr><th>Prioridad</th><th>Moto · zona</th><th>Paradas</th><th>Envíos</th><th>Km</th><th>Duración</th><th>Salir a más tardar</th><th>Termina*</th><th>Holgura</th><th>Estado</th><th>Repartidor</th><th></th></tr></thead><tbody>`;
   sched.forEach((s,i)=>{const ok=s.slackMin>=-0.5;
-    h+=`<tr data-i="${i}"><td><span class="dot" style="background:${s.color}"></span>Ruta ${s.num}</td><td style="white-space:normal;min-width:170px"><span style="font-size:11px;padding:1px 6px;border-radius:6px;background:${s.chica?'var(--info-bg)':'var(--chip)'};color:${s.chica?'var(--info)':'var(--fg)'};font-weight:600">${s.chica?'🛵 Chica':'🏍️ Grande'}</span> <span class="muted" style="font-size:12px">${esc(s.zona)}</span></td><td>${s.stops.length}</td><td>${s.parcels}</td><td>${s.km.toFixed(1)}</td><td>${durTxt(s.durMin)}</td><td><b>${hhmm(s.latest)}</b></td><td>${hhmm(s.end)}</td><td>${Math.round(s.slackMin)} min</td><td class="${ok?'st-ok':'st-bad'}">${ok?'A tiempo':'Tarde'}</td><td><select class="emp" data-emp="${i}" style="min-width:170px;padding:5px">${empOptions()}</select></td><td style="display:flex;gap:4px"><button data-print="${i}">Imprimir</button><button data-pdf="${i}">PDF</button><button data-wa="${i}" style="background:#25D366;border-color:#25D366;color:#fff">WhatsApp</button><button data-copy="${i}">Copiar</button></td></tr>`;});
+    h+=`<tr data-i="${i}"><td><span class="dot" style="background:${s.color}"></span>Ruta ${s.num}</td><td style="white-space:normal;min-width:170px"><span style="font-size:11px;padding:1px 6px;border-radius:6px;background:${s.chica?'var(--info-bg)':'var(--chip)'};color:${s.chica?'var(--info)':'var(--fg)'};font-weight:600">${s.chica?'🛵 Chica':'🏍️ Grande'}</span> <span class="muted" style="font-size:12px">${esc(s.zona)}</span></td><td>${s.stops.length}</td><td>${s.parcels}</td><td>${s.km.toFixed(1)}</td><td>${durTxt(s.durMin)}</td><td><b>${hhmm(s.latest)}</b></td><td>${hhmm(s.end)}</td><td>${Math.round(s.slackMin)} min</td><td class="${ok?'st-ok':'st-bad'}">${ok?'A tiempo':'Tarde'}</td><td style="white-space:normal"><select class="emp" data-emp="${i}" style="min-width:190px;padding:5px">${empOptions()}</select><div class="sug" id="sug${i}"></div></td><td style="display:flex;gap:4px"><button data-print="${i}">Imprimir</button><button data-pdf="${i}">PDF</button><button data-wa="${i}" style="background:#25D366;border-color:#25D366;color:#fff">WhatsApp</button><button data-copy="${i}">Copiar</button></td></tr>`;});
   h+=`</tbody></table></div>`;
   sched.forEach((s,i)=>{
     h+=`<details class="route" id="det${i}"><summary><span class="dot" style="background:${s.color}"></span>Ruta ${s.num} · ${s.chica?'🛵 moto chica':'🏍️ moto grande'} · ${esc(s.zona)} · ${s.stops.length} paradas · ${durTxt(s.durMin)} · salir a más tardar ${hhmm(s.latest)}</summary><ol>`;
@@ -922,8 +926,12 @@ function renderResult(){
   $('results').querySelectorAll('button[data-wa]').forEach(b=>b.onclick=e=>{e.stopPropagation();shareWA(+b.dataset.wa);});
   $('results').querySelectorAll('button[data-copy]').forEach(b=>b.onclick=async e=>{e.stopPropagation();try{await navigator.clipboard.writeText(routeText(sched[+b.dataset.copy]));b.textContent='Copiado';setTimeout(()=>b.textContent='Copiar',1500);}catch(_){prompt('Copia el texto:',routeText(sched[+b.dataset.copy]));}});
   const asig=asignaciones();
-  $('results').querySelectorAll('select[data-emp]').forEach(sel=>{const num=sched[+sel.dataset.emp].num;sel.value=asig[num]||'';sel.onclick=e=>e.stopPropagation();
-    sel.onchange=()=>{const a=asignaciones();if(sel.value&&Object.keys(a).some(k=>+k!==num&&a[k]===sel.value)){alert('Ese repartidor ya tiene otra ruta.');sel.value=a[num]||'';return;}a[num]=sel.value;store.set('asig.'+S.result.cfg.date,a);};});
+  $('results').querySelectorAll('select[data-emp]').forEach(sel=>{const i=+sel.dataset.emp,num=sched[i].num;sel.value=asig[num]||'';sel.onclick=e=>e.stopPropagation();pintarSug(i);
+    sel.onchange=()=>{const a=asignaciones();if(sel.value&&Object.keys(a).some(k=>+k!==num&&a[k]===sel.value)){alert('Ese repartidor ya tiene otra ruta.');sel.value=a[num]||'';return;}
+      const e=S.srv&&S.srv.empleados.find(x=>x.no_empleado===sel.value);
+      if(e&&e.moto_tipo==='chica'&&!sched[i].chica&&!confirm(`${e.nombre} usa moto chica y la ruta ${num} es de moto grande (puede tener Edo. Méx., cerros o autopistas). ¿Asignarla de todos modos?`)){sel.value=a[num]||'';return;}
+      a[num]=sel.value;store.set(asigKey(),a);pintarSug(i);pintarAprobacion();};});
+  pintarAprobacion();
   $('pubBtn').onclick=publicar;
   $('xlsOut').onclick=exportXLSX;
   const uf=$('useFewer');if(uf)uf.onclick=()=>{$('drivers').value=R.fewer;store.set('f.drivers',String(R.fewer));optimize();};
@@ -1061,19 +1069,136 @@ function shareWA(i){
   const url=tel?`https://web.whatsapp.com/send?phone=${tel}&text=${txt}`:`https://web.whatsapp.com/send?text=${txt}`;
   window.open(url,'whatsapp');
 }
-function asignaciones(){return S.result?store.get('asig.'+S.result.cfg.date,{}):{};}
+const asigKey=(v)=>'asig.'+S.result.cfg.date+'.'+(v||S.view||'given');
+function asignaciones(){return S.result?store.get(asigKey(),{}):{};}
+function asigMeta(v){return S.result?store.get(asigKey(v)+'.meta',{aprobada:false,sug:{},info:{}}):{aprobada:false,sug:{},info:{}};}
+const kmEntre=(a,b)=>hav({lat:a[0],lng:a[1]},{lat:b[0],lng:b[1]})/1000;
+const finRuta=s=>{const o=s.stops[s.stops.length-1];return o?[o.st.lat,o.st.lng]:null;};
+const ASIS={presente:'✓ checó',programado:'programado',sin_checar:'sin checar',salio:'ya salió',descanso:'descanso',pasado:''};
+function disponibles(){const e=(S.srv&&S.srv.empleados||[]).filter(x=>x.repartidor);return e.filter(x=>x.asistencia&&(x.asistencia.estado==='presente'||x.asistencia.estado==='programado'));}
+/**
+ * Preasignación (requiere aprobación): en orden de jerarquía (lugar por % de éxito y volumen en Shipday), cada repartidor
+ * con asistencia toma la ruta que termina más cerca de su casa. Moto chica solo rutas de moto chica; si quedan tantas rutas
+ * chicas como repartidores de moto chica por asignar, las motos grandes no las toman.
+ */
+function sugerirAsignacion(sched){
+  const emps=(S.srv&&S.srv.empleados||[]).filter(e=>e.repartidor);
+  const est=e=>e.asistencia&&e.asistencia.estado;
+  let pool=emps.filter(e=>est(e)==='presente'||est(e)==='programado');
+  if(pool.length<sched.length)pool=pool.concat(emps.filter(e=>est(e)==='sin_checar'));
+  const rk=e=>e.rango?e.rango.rank:999;
+  pool.sort((a,b)=>rk(a)-rk(b)||(!!b.casa-!!a.casa)||a.nombre.localeCompare(b.nombre));
+  const orden=pool.filter(e=>e.casa).concat(pool.filter(e=>!e.casa));
+  const libres=new Set(sched.map((_,i)=>i)),map={},info={};
+  orden.forEach((e,k)=>{
+    if(!libres.size)return;
+    let c=[...libres];
+    const chicasLib=c.filter(i=>sched[i].chica),grandesLib=c.filter(i=>!sched[i].chica);
+    if(e.moto_tipo==='chica'){c=chicasLib;if(!c.length)return;}
+    else{const chicasDespues=orden.slice(k+1).filter(x=>x.moto_tipo==='chica').length;
+      if(grandesLib.length&&(e.moto_tipo==='grande'||chicasLib.length<=chicasDespues))c=grandesLib;}
+    let best=c[0],d=null;
+    if(e.casa){c.forEach(i=>{const f=finRuta(sched[i]);if(!f)return;const x=kmEntre(f,e.casa);if(d==null||x<d){d=x;best=i;}});}
+    else best=c.slice().sort((a,b)=>sched[a].num-sched[b].num)[0];
+    libres.delete(best);const num=sched[best].num;map[num]=e.no_empleado;
+    info[num]={km:d,rank:e.rango?e.rango.rank:null,est:est(e)};
+  });
+  return{map,info};
+}
+function prepararAsignacion(view,sched){
+  if(!S.srv||!S.srv.empleados)return;
+  const s=sugerirAsignacion(sched);
+  store.set(asigKey(view),s.map);store.set(asigKey(view)+'.meta',{aprobada:false,sug:s.map,info:s.info,cuando:Date.now()});
+}
+function asigBanner(){return S.srv?`<div id="asigBanner" class="alert info"></div>`:'';}
+function pintarAprobacion(){
+  const b=$('asigBanner');if(!b||!S.result)return;const m=asigMeta(),a=asignaciones(),sched=currentSched();
+  const asign=sched.filter(s=>a[s.num]).length,cambios=sched.filter(s=>m.sug&&(m.sug[s.num]||'')!==(a[s.num]||'')).length;
+  const sinPresentes=disponibles().length===0;
+  b.className='alert '+(m.aprobada?'ok':'info');
+  b.innerHTML=m.aprobada
+    ?`<b>✓ Asignación aprobada</b> · ${asign} de ${sched.length} rutas con repartidor${cambios?` · ${cambios} cambio(s) a la sugerencia`:''}. Ya puedes publicar.`
+    :`<b>Asignación sugerida · falta tu aprobación</b><br>Por jerarquía (lugar por % de éxito y volumen en Shipday, últimos ${S.srv.jerarquia_dias||30} días): cada repartidor con asistencia toma, en orden, la ruta que termina más cerca de su casa. Las motos chicas solo toman rutas de moto chica.${sinPresentes?'<br>⚠️ Nadie tiene asistencia registrada: se sugirieron los que tienen turno.':''} Cambia lo que quieras en la columna “Repartidor”.<div class="btns" style="margin-top:6px"><button id="aprobarBtn" style="background:var(--ok);border-color:var(--ok);color:#fff;font-weight:600">✓ Aprobar asignación</button><button id="resugerir">Volver a sugerir</button></div>`;
+  const ap=$('aprobarBtn');if(ap)ap.onclick=aprobarAsignacion;
+  const rs=$('resugerir');if(rs)rs.onclick=()=>{prepararAsignacion(S.view,currentSched());renderResult();};
+  const pb=$('pubBtn');if(pb){pb.disabled=!m.aprobada;pb.title=m.aprobada?'':'Primero aprueba la asignación';pb.style.opacity=m.aprobada?'':'.55';}
+}
+function aprobarAsignacion(){
+  const a=asignaciones(),sched=currentSched(),falt=sched.filter(s=>!a[s.num]).length;
+  if(falt&&!confirm(`${falt} ruta(s) se quedan sin repartidor y no se publicarán. ¿Aprobar así?`))return;
+  const m=asigMeta();m.aprobada=true;m.aprobada_en=Date.now();store.set(asigKey()+'.meta',m);pintarAprobacion();
+}
+function pintarSug(i){
+  const el=$('sug'+i);if(!el||!S.result)return;const s=currentSched()[i],no=asignaciones()[s.num],m=asigMeta();
+  const e=no&&S.srv?S.srv.empleados.find(x=>x.no_empleado===no):null;if(!e){el.textContent='';return;}
+  const f=finRuta(s),km=e.casa&&f?kmEntre(f,e.casa):null,p=[];
+  if(m.sug&&m.sug[s.num]===no)p.push('<b style="color:var(--info)">sugerido</b>');
+  if(e.rango)p.push(`#${e.rango.rank} · ${e.rango.pct==null?'—':e.rango.pct+'%'}`);
+  p.push(km==null?'<span style="color:var(--warn)">sin casa en el mapa</span>':`🏠 termina a ${km.toFixed(1)} km`);
+  if(e.moto_tipo)p.push(e.moto_tipo==='chica'?'🛵':'🏍️');
+  const a=e.asistencia&&e.asistencia.estado;if(a)p.push(a==='presente'?`✓ ${e.asistencia.entrada}`:`<span style="color:var(--warn)">${ASIS[a]||a}</span>`);
+  el.innerHTML=p.join(' · ');
+}
+async function cargarAsistencia(){
+  if(!SES.token)return;
+  const f=$('date').value;if(S.srv&&S.srv.fecha===f&&Date.now()-(S.srvT||0)<120000)return;
+  try{const r=await api('rutasConfig',{fecha:f});S.srv=Object.assign(S.srv||{},r);S.srvT=Date.now();pintarClaves();pintarAsistencia();}catch(e){}
+}
+function pintarAsistencia(){
+  const b=$('asisBox');if(!b)return;if(!S.srv||!S.srv.empleados){b.textContent='';return;}
+  const rep=S.srv.empleados.filter(e=>e.repartidor),d=disponibles(),hoy=S.srv.fecha===S.srv.hoy;
+  const t=x=>d.filter(e=>(e.moto_tipo||'')===x).length,sinCh=rep.filter(e=>e.asistencia&&e.asistencia.estado==='sin_checar').length;
+  const sinCasa=d.filter(e=>!e.casa).length;
+  b.innerHTML=`👥 <b>${d.length}</b> repartidor(es) ${hoy?'checaron entrada hoy':'con turno ese día (según su horario)'}: ${t('grande')} 🏍️ grande · ${t('chica')} 🛵 chica${t('')?` · ${t('')} sin tipo de moto`:''}${hoy&&sinCh?` · ${sinCh} con turno sin checar`:''}${sinCasa?` · ${sinCasa} sin casa en el mapa`:''}.${d.length?` <a href="#" id="usarAsis">Usar ${d.length}</a>`:''}`;
+  const u=$('usarAsis');if(u)u.onclick=e=>{e.preventDefault();ajustarMotos(d);};
+}
+function ajustarMotos(d){
+  const c=readCfg(),n=d.length,gr=d.filter(e=>e.moto_tipo==='grande').length,ch=d.filter(e=>e.moto_tipo==='chica').length,sin=n-gr-ch;
+  let big=Math.min(Math.max(c.big,gr),gr+sin),small=Math.min(Math.max(c.small,ch),n-big);if(big+small<n)big=n-small;
+  $('big').value=big;$('small').value=small;['big','small'].forEach(id=>{store.set('f.'+id,$(id).value);});totalMotos();
+}
+function dialogo(titulo,html,botones){
+  return new Promise(res=>{
+    const ov=document.createElement('div');ov.id='dlg';ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+    ov.innerHTML=`<div style="background:var(--card,#fff);color:inherit;border-radius:12px;max-width:520px;width:100%;padding:18px;box-shadow:0 10px 40px rgba(0,0,0,.3)"><h3 style="margin:0 0 8px">${titulo}</h3><div style="font-size:14px;line-height:1.45">${html}</div><div class="btns" style="margin-top:14px;justify-content:flex-end">${botones.map((b,i)=>`<button data-b="${i}" ${b[2]?`style="${b[2]}"`:''}>${b[0]}</button>`).join('')}</div></div>`;
+    ov.querySelectorAll('button[data-b]').forEach(x=>x.onclick=()=>{ov.remove();res(botones[+x.dataset.b][1]);});
+    document.body.appendChild(ov);
+  });
+}
+/** Antes de generar: si hay más motos cargadas que repartidores con asistencia, avisa y pide confirmación. */
+async function confirmarMotos(){
+  if(!S.srv)return true;
+  setStatus('Revisando asistencia en el checador…');
+  await cargarAsistencia();setStatus('');
+  if(!S.srv.empleados)return true;
+  const c=readCfg(),d=disponibles(),hoy=S.srv.fecha===S.srv.hoy;
+  if(c.K<=d.length)return true;
+  const lista=d.map(e=>`${esc(e.nombre)}${e.moto_tipo?(e.moto_tipo==='chica'?' 🛵':' 🏍️'):''}${e.asistencia.entrada?' ('+e.asistencia.entrada+')':''}`).join(', ')||'nadie';
+  const pri='background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600';
+  const r=await dialogo('Hay más motos que repartidores',
+    `Cargaste <b>${c.K}</b> moto(s) (${c.big} grande${c.big===1?'':'s'}, ${c.small} chica${c.small===1?'':'s'}) pero solo hay <b>${d.length}</b> repartidor(es) ${hoy?'con entrada en el checador hoy':'con turno ese día'}: ${lista}.<br><br>¿Generar ${c.K} rutas de todos modos?`,
+    d.length?[['Cancelar','no'],[`Ajustar a ${d.length}`,'ajustar','font-weight:600'],[`Generar ${c.K} rutas`,'si',pri]]:[['Cancelar','no'],[`Generar ${c.K} rutas`,'si',pri]]);
+  if(r==='ajustar'){ajustarMotos(d);return true;}
+  return r==='si';
+}
+
 function empleadoDe(num){const no=asignaciones()[num];return no&&S.srv?S.srv.empleados.find(e=>e.no_empleado===no):null;}
 function conRepartidor(R){const e=empleadoDe(R.num);return Object.assign({},R,{repartidor:e?e.nombre:''});}
 function empOptions(){
   if(!S.srv)return'<option value="">(sin sesión)</option>';
   const rep=S.srv.empleados.filter(e=>e.repartidor),otros=S.srv.empleados.filter(e=>!e.repartidor);
-  const o=e=>`<option value="${esc(e.no_empleado)}">${esc(e.nombre)}</option>`;
-  return '<option value="">— Elegir —</option>'+(rep.length?`<optgroup label="Repartidores">${rep.map(o).join('')}</optgroup>`:'')+(otros.length?`<optgroup label="Otros">${otros.map(o).join('')}</optgroup>`:'');
+  const est=e=>e.asistencia&&e.asistencia.estado;
+  const rk=e=>e.rango?e.rango.rank:999;
+  const o=e=>`<option value="${esc(e.no_empleado)}">${esc(e.nombre)}${e.rango?' · #'+e.rango.rank:''}${e.moto_tipo==='chica'?' · 🛵':e.moto_tipo==='grande'?' · 🏍️':''}${est(e)==='presente'?' · ✓ '+e.asistencia.entrada:''}</option>`;
+  const g=(t,l)=>l.length?`<optgroup label="${t}">${l.sort((a,b)=>rk(a)-rk(b)||a.nombre.localeCompare(b.nombre)).map(o).join('')}</optgroup>`:'';
+  const con=rep.filter(e=>est(e)==='presente'||est(e)==='programado'),sin=rep.filter(e=>!(est(e)==='presente'||est(e)==='programado'));
+  return '<option value="">— Elegir —</option>'+g(S.srv.fecha===S.srv.hoy?'Con asistencia hoy':'Con turno',con)+g('Repartidores sin asistencia',sin)+g('Otros',otros);
 }
 function simplificar(pts,n){if(pts.length<=n)return pts;const st=Math.ceil(pts.length/n),out=[];for(let i=0;i<pts.length;i+=st)out.push(pts[i]);out.push(pts[pts.length-1]);return out;}
 async function publicar(){
-  const R=S.result;const sched=currentSched();const asig=asignaciones();
-  const rutas=sched.filter(s=>asig[s.num]).map(s=>({no_empleado:asig[s.num],num:s.num,total:s.total,salida:hhmm(s.start),fin:hhmm(s.end),limite:hhmm(s.deadline),km:+s.km.toFixed(1),color:s.color,
+  const R=S.result;const sched=currentSched();const asig=asignaciones();const meta=asigMeta();
+  if(S.srv&&!meta.aprobada)return alert('Primero aprueba la asignación (botón “Aprobar asignación”).');
+  const rutas=sched.filter(s=>asig[s.num]).map(s=>({no_empleado:asig[s.num],sugerido:(meta.sug||{})[s.num]||'',num:s.num,total:s.total,salida:hhmm(s.start),fin:hhmm(s.end),limite:hhmm(s.deadline),km:+s.km.toFixed(1),color:s.color,
     deposito:[R.cfg.depot.lat,R.cfg.depot.lng],geom:simplificar(s.geom.map(p=>[+(+p[0]).toFixed(5),+(+p[1]).toFixed(5)]),900),
     paradas:s.stops.map((o,i)=>{const x=stopInfo(o,i,s);return{orden:i+1,eta:x.eta,envios:x.ids,ref:x.nombres,dir:[x.calle,x.zona].filter(Boolean).join(', '),compromiso:x.comp,lat:o.st.lat,lng:o.st.lng,espera:x.espera,tipo:x.same?'same_day':''};})}));
   if(!rutas.length)return alert('Elige el repartidor de cada ruta en la columna "Repartidor".');
@@ -1114,7 +1239,7 @@ async function cargarServidor(){
   }
   $('who').textContent=(u.rol==='patron'?'Patrón: ':'Admin: ')+u.nombre;
   if(u.rol!=='patron')$('keysEdit').style.display='none';
-  try{S.srv=await api('rutasConfig');pintarClaves();}
+  try{S.srv=await api('rutasConfig',{fecha:$('date').value});pintarClaves();pintarAsistencia();}
   catch(e){$('gate').style.display='block';$('gate').textContent='No se pudo conectar con el portal: '+e.message;$('keysState').textContent='';}
 }
 $('keysEdit').onclick=()=>{$('keysBox').style.display=$('keysBox').style.display==='block'?'none':'block';};
@@ -1128,7 +1253,8 @@ $('keysSave').onclick=async()=>{
 
 // ===== Inicio =====
 loadSettings();bindSettings();initMap();cargarServidor();
-window.__ruteador={S,ticketHTML,conRepartidor,currentSched,printCfg,routeText};
+$('date').addEventListener('change',()=>cargarAsistencia());
+window.__ruteador={S,ticketHTML,conRepartidor,currentSched,printCfg,routeText,sugerirAsignacion,asignaciones,asigMeta};
 $('file').addEventListener('change',onFile);
 $('tpl').addEventListener('click',downloadTemplate);
 $('run').addEventListener('click',optimize);
