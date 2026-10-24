@@ -85,7 +85,7 @@ function go(tab, ...args) { state.tab = tab; (VIEWS[tab] || VIEWS[modoPatron() ?
 
 function screen(title, body, { back, actions, sub } = {}) {
   state.seq++;
-  $app.replaceChildren(
+  $app.replaceChildren(...[
     h('header', { class: 'topbar' + (modoPatron() ? ' patron' : '') },
       back ? h('button', { class: 'icon-btn', 'aria-label': 'Regresar', onclick: back }, '←') : h('span', { class: 'logo' }, modoPatron() ? '🏢' : '📦'),
       h('div', { class: 'tb-title' }, h('h1', {}, title), sub && h('span', { class: 'tb-sub' }, sub)),
@@ -93,7 +93,7 @@ function screen(title, body, { back, actions, sub } = {}) {
       h('button', { class: 'icon-btn bell', 'aria-label': 'Notificaciones', onclick: () => bandeja() }, '🔔', state.noLeidos ? h('span', { class: 'dot' }, state.noLeidos > 9 ? '9+' : state.noLeidos) : null)),
     DEMO ? h('div', { class: 'demo-strip' }, 'Modo demostración · datos de ejemplo') : null,
     h('main', { class: 'content' }, body),
-    nav());
+    nav()].filter(Boolean)); // replaceChildren(null) pinta el texto "null"
   window.scrollTo(0, 0);
 }
 function nav() {
@@ -448,7 +448,7 @@ function flotillaView(destino) {
   state.seq++;
   const src = FLOTILLA_URL + '?embed=1' + (destino ? '#' + destino : '');
   const frame = h('iframe', { class: 'fl-frame', src, title: 'Flotilla', allow: 'camera; geolocation' });
-  $app.replaceChildren(
+  $app.replaceChildren(...[
     h('header', { class: 'topbar' + (modoPatron() ? ' patron' : '') },
       h('button', { class: 'icon-btn', 'aria-label': 'Regresar al portal', onclick: () => { go(prev || (modoPatron() ? 'pmas' : 'inicio')); } }, '←'),
       h('div', { class: 'tb-title' }, h('h1', {}, 'Flotilla'), h('span', { class: 'tb-sub' }, 'Regresar al portal')),
