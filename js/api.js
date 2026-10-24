@@ -26,9 +26,12 @@ export async function api(action, data = {}) {
   }
   if (CONFIG.API_URL.startsWith('PENDIENTE')) throw new Error('Falta configurar la URL de Apps Script en js/config.js (o abre la app con ?demo para verla con datos de ejemplo)');
   let res;
+  const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = ctl && setTimeout(() => ctl.abort(), 30000);
   try {
-    res = await fetch(CONFIG.API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action, token: session.token, ...data }) });
-  } catch { throw new NetworkError('Sin conexión'); }
+    res = await fetch(CONFIG.API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action, token: session.token, ...data }), signal: ctl ? ctl.signal : undefined });
+  } catch (e) { throw new NetworkError(e && e.name === 'AbortError' ? 'La señal está muy lenta: el servidor no respondió en 30 s. Intenta de nuevo.' : 'Sin conexión'); }
+  finally { if (timer) clearTimeout(timer); }
   if (!res.ok) throw new NetworkError('Servidor no disponible (' + res.status + ')');
   const j = await res.json();
   if (!j.ok) {
