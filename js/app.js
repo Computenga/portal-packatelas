@@ -448,7 +448,7 @@ function flotillaView(destino) {
   state.seq++;
   const src = FLOTILLA_URL + '?embed=1' + (destino ? '#' + destino : '');
   const frame = h('iframe', { class: 'fl-frame', src, title: 'Flotilla', allow: 'camera; geolocation' });
-  $app.replaceChildren(...[
+  $app.replaceChildren(
     h('header', { class: 'topbar' + (modoPatron() ? ' patron' : '') },
       h('button', { class: 'icon-btn', 'aria-label': 'Regresar al portal', onclick: () => { go(prev || (modoPatron() ? 'pmas' : 'inicio')); } }, '←'),
       h('div', { class: 'tb-title' }, h('h1', {}, 'Flotilla'), h('span', { class: 'tb-sub' }, 'Regresar al portal')),
