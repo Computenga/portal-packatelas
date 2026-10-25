@@ -140,6 +140,8 @@ details.route li span{color:var(--muted)}
       </div>
       <label class="check"><input type="checkbox" id="skipDone" checked>Omitir entregados y cancelados (columna de estado)</label>
       <label class="check"><input type="checkbox" id="group" checked>Juntar envíos con las mismas coordenadas en una sola parada</label>
+      <label class="check"><input type="checkbox" id="capPesoOn" checked>Considerar el peso de los paquetes (columna Peso)</label>
+      <label class="check"><input type="checkbox" id="capVolOn" checked>Considerar las medidas de los paquetes (columnas Largo, Alto y Ancho)</label>
     </div>
 
     <div class="card">
@@ -175,7 +177,6 @@ details.route li span{color:var(--muted)}
         <div><label>+min/envío extra</label><input type="number" id="extra" min="0" value="2"></div>
       </div>
       <div class="hint">La espera es en minutos. “+min/envío extra” se suma cuando una parada tiene varios envíos.</div>
-      <label class="check"><input type="checkbox" id="capOn" checked>Considerar peso y volumen de los paquetes (columnas Largo, Alto, Ancho y Peso)</label>
       <div class="row">
         <div><label>Peso máx. por moto (kg)</label><input type="number" id="capKg" min="1" step="1" value="85"></div>
         <div><label>Aprovechamiento del espacio (%)</label><input type="number" id="capAprov" min="30" max="100" step="5" value="90"></div>
@@ -458,7 +459,7 @@ function readCfg(){
   const date=$('date').value;const start=new Date(`${date}T${$('tStart').value}:00`),end=new Date(`${date}T${$('tEnd').value}:00`);
   return{date,start,end,K:Math.max(1,(parseInt($('big').value)||0)+(parseInt($('small').value)||0)),big:Math.max(0,parseInt($('big').value)||0),wait:Math.max(0,parseFloat($('wait').value)||0),extra:Math.max(0,parseFloat($('extra').value)||0),
     group:$('group').checked,factor:parseFloat($('factor').value)||1.5,adj:parseFloat($('adj').value)||1,small:Math.max(0,parseInt($('small').value)||0),smallZone:$('smallZone').value,grp:$('grp').value,grpPen:Math.max(0,parseFloat($('grpPen').value)||0)*60,altOn:$('altOn').checked,motoOn:$('motoOn').checked,cerroSens:$('cerroSens').value,smallPen:Math.max(0,parseFloat($('smallPen').value)||0)/100,useTT:!!(S.srv&&S.srv.tomtom),ttMode:$('ttMode').value,
-    capOn:$('capOn').checked,capKg:Math.max(1,parseFloat($('capKg').value)||85),capAprov:Math.min(1,Math.max(0.3,(parseFloat($('capAprov').value)||90)/100)),
+    capPesoOn:$('capPesoOn').checked,capVolOn:$('capVolOn').checked,capKg:Math.max(1,parseFloat($('capKg').value)||85),capAprov:Math.min(1,Math.max(0.3,(parseFloat($('capAprov').value)||90)/100)),
     espacios:[medidas($('capParrilla').value,[65,60,70]),medidas($('capBolsa').value,[30,30,100])],capTol:Math.max(0,parseFloat($('capTol').value)||0),forma:Math.max(0,parseFloat($('forma').value)||0),
     ms:parseInt($('quality').value)||4000,pw:Math.min(80,Math.max(40,parseFloat($('pw').value)||72)),fs:parseFloat($('fs').value)||1.15,skipDone:$('skipDone').checked,depot:{lat:parseFloat($('dLat').value),lng:parseFloat($('dLng').value)}};
 }
@@ -470,7 +471,7 @@ function cabeEn(p,e,tol){tol=tol||0;const a=p.slice().sort((x,y)=>x-y),b=e.slice
 const PERSIST=['tStart','tEnd','big','wait','extra','ttMode','adj','quality','pw','fs','small','cerroSens','smallPen','smallZone','grp','grpPen','capKg','capAprov','capParrilla','capBolsa','capTol','forma'];
 function loadSettings(){
   PERSIST.forEach(id=>{const v=store.get('f.'+id,null);if(v!==null&&$(id))$(id).value=v;});
-  ['group','skipDone','altOn','motoOn','capOn'].forEach(id=>{const v=store.get('f.'+id,null);if(v!==null)$(id).checked=v;});
+  ['group','skipDone','altOn','motoOn','capPesoOn','capVolOn'].forEach(id=>{const v=store.get('f.'+id,null);if(v!==null)$(id).checked=v;});
   const d=store.get('depot',DEFAULT_DEPOT);$('dLat').value=d.lat.toFixed(6);$('dLng').value=d.lng.toFixed(6);
   const t=new Date();$('date').value=`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
   refreshFactor();
@@ -479,7 +480,7 @@ function totalMotos(){const b=parseInt($('big').value)||0,c=parseInt($('small').
 function bindSettings(){
   ['big','small'].forEach(id=>$(id).addEventListener('input',totalMotos));setTimeout(totalMotos,0);
   PERSIST.forEach(id=>$(id).addEventListener('change',()=>store.set('f.'+id,$(id).value)));
-  ['group','skipDone','altOn','motoOn','capOn'].forEach(id=>$(id).addEventListener('change',()=>store.set('f.'+id,$(id).checked)));
+  ['group','skipDone','altOn','motoOn','capPesoOn','capVolOn'].forEach(id=>$(id).addEventListener('change',()=>store.set('f.'+id,$(id).checked)));
   $('tStart').addEventListener('change',refreshFactor);
   $('factor').addEventListener('input',()=>{S.factorTouched=true;});
   ['dLat','dLng'].forEach(id=>$(id).addEventListener('change',()=>setDepot(parseFloat($('dLat').value),parseFloat($('dLng').value))));
@@ -572,7 +573,7 @@ function zonaDe(p){
 function buildStops(cfg){
   const m=getMap();if(m.lat<0||m.lng<0)throw new Error('Selecciona las columnas de latitud y longitud.');
   const bad=[],parcels=[],outside=[],skipped=[],dups=[],noCabe=[];let sinMedidas=0;const seen=new Set();
-  const conMedidas=cfg.capOn&&m.largo>=0&&m.alto>=0&&m.ancho>=0&&m.peso>=0;
+  const conPeso=cfg.capPesoOn&&m.peso>=0,conVol=cfg.capVolOn&&m.largo>=0&&m.alto>=0&&m.ancho>=0,conMedidas=conPeso||conVol;
   S.rows.forEach((r,i)=>{
     const id=cell(r,m.envio)||('Fila '+(i+2));
     if(cfg.skipDone&&m.estado>=0&&DONE_STATES.test(cell(r,m.estado))){skipped.push(id);return;}
@@ -587,9 +588,9 @@ function buildStops(cfg){
     const ref=cell(r,m.name);const tipo=cell(r,m.tipo).toLowerCase();
     const esp=m.espera>=0?parseNum(r[m.espera]):NaN;
     let dims=null,g=0;
-    if(conMedidas){const d=[parseNum(r[m.largo]),parseNum(r[m.alto]),parseNum(r[m.ancho])];g=parseNum(r[m.peso]);
-      if(d.every(x=>isFinite(x)&&x>0)){dims=d;}else sinMedidas++;
-      if(!isFinite(g)||g<0)g=0;
+    if(conMedidas){
+      if(conVol){const d=[parseNum(r[m.largo]),parseNum(r[m.alto]),parseNum(r[m.ancho])];if(d.every(x=>isFinite(x)&&x>0)){dims=d;}else sinMedidas++;}
+      if(conPeso){g=parseNum(r[m.peso]);if(!isFinite(g)||g<0)g=0;}
       if((dims&&!cfg.espacios.some(e=>cabeEn(dims,e,cfg.capTol)))||g>cfg.capKg*1000)noCabe.push({id,dims:dims||[0,0,0],g,dir:calle});}
     const revisar=conMedidas&&noCabe.length&&noCabe[noCabe.length-1].id===id;
     parcels.push({revisar,id,dir,calle,city,edo:edo.replace(/^Distrito Federal$/i,'CDMX').replace(/^Estado de M[eé]xico$/i,'Edo. Méx.'),cp,comp,ref,tipo,lat,lng,esp,
@@ -611,13 +612,13 @@ function buildStops(cfg){
     s.g=s.parcels.reduce((a,p)=>a+(p.g||0),0);s.vol=s.parcels.reduce((a,p)=>a+(p.vol||0),0);s.revisar=s.parcels.some(p=>p.revisar);
     if(conMedidas){s.g=Math.min(s.g,cfg.capKg*1000*0.95);s.vol=Math.min(s.vol,capVolDe(cfg)*0.95);} // una parada siempre cabe en una moto
   }
-  return{stops,bad,outside,skipped,dups,parcelCount:parcels.length,noCabe,sinMedidas,conMedidas};
+  return{stops,bad,outside,skipped,dups,parcelCount:parcels.length,noCabe,sinMedidas,conMedidas,conPeso,conVol};
 }
 function updateFileInfo(){
-  try{const cfg=readCfg();const {stops,bad,skipped,dups,parcelCount,noCabe,conMedidas}=buildStops(cfg);
+  try{const cfg=readCfg();const {stops,bad,skipped,dups,parcelCount,noCabe,conMedidas,conPeso,conVol}=buildStops(cfg);
     const kg=stops.reduce((a,s)=>a+s.g,0)/1000,vol=stops.reduce((a,s)=>a+s.vol,0);
     $('fileInfo').textContent=`${S.fileName}: ${parcelCount} envíos a rutear en ${stops.length} paradas`+(skipped.length?` · ${skipped.length} entregados/cancelados omitidos`:'')+(dups.length?` · ${dups.length} duplicados omitidos`:'')+(bad.length?` · ${bad.length} sin coordenadas`:'')+
-      (conMedidas?` · carga ${kg.toFixed(0)} kg y ${(vol/1000).toFixed(0)} L (mínimo ${Math.max(Math.ceil(kg/cfg.capKg),Math.ceil(vol/capVolDe(cfg)))} motos por carga)`+(noCabe.length?` · ${noCabe.length} no caben en moto`:''):'');
+      (conMedidas?` · carga ${[conPeso&&kg.toFixed(0)+' kg',conVol&&(vol/1000).toFixed(0)+' L'].filter(Boolean).join(' y ')} (mínimo ${Math.max(conPeso?Math.ceil(kg/cfg.capKg):0,conVol?Math.ceil(vol/capVolDe(cfg)):0)} motos por carga)`+(noCabe.length?` · ${noCabe.length} no caben en moto`:''):'');
   }catch(e){$('fileInfo').textContent=`${S.fileName}: ${S.rows.length} filas · falta mapear columnas`;}
 }
 function previewStops(){
@@ -806,10 +807,11 @@ async function optimize(){
     if(!isFinite(cfg.depot.lat)||!isFinite(cfg.depot.lng))throw new Error('Revisa las coordenadas del origen.');
     if(!(cfg.end>cfg.start))throw new Error('La hora máxima de término debe ser después de la hora de salida.');
     if(!checkMapping())throw new Error('Faltan columnas por mapear (marcadas en rojo).');
-    const {stops,bad,outside,skipped,dups,parcelCount,noCabe,sinMedidas,conMedidas}=buildStops(cfg);
+    const {stops,bad,outside,skipped,dups,parcelCount,noCabe,sinMedidas,conMedidas,conPeso,conVol}=buildStops(cfg);
     if(noCabe.length)warnings.push(`${noCabe.length} envío(s) con medidas que no caben en la parrilla ni en la bolsa (aun con ${cfg.capTol} cm de tolerancia) o de más de ${cfg.capKg} kg: van en moto grande y salen marcados “⚠ revisar tamaño” en el ticket para confirmarlos en bodega: `+noCabe.slice(0,12).map(x=>`${x.id} (${x.dims.join('×')} cm, ${(x.g/1000).toFixed(1)} kg)`).join(', ')+(noCabe.length>12?'…':''));
-    if(conMedidas&&sinMedidas)warnings.push(`${sinMedidas} envío(s) sin medidas en el Excel: cuentan solo su peso.`);
-    if(cfg.capOn&&!conMedidas)warnings.push('El Excel no trae las columnas Largo, Alto, Ancho y Peso (o no están mapeadas): las rutas no consideran la carga.');
+    if(conVol&&sinMedidas)warnings.push(`${sinMedidas} envío(s) sin medidas en el Excel: no cuentan volumen${conPeso?', solo su peso':''}.`);
+    if(cfg.capPesoOn&&!conPeso)warnings.push('El Excel no trae la columna Peso (o no está mapeada): las rutas no consideran el peso.');
+    if(cfg.capVolOn&&!conVol)warnings.push('El Excel no trae las columnas Largo, Alto y Ancho (o no están mapeadas): las rutas no consideran las medidas.');
     if(!stops.length)throw new Error('No hay envíos con coordenadas válidas.');
     if(skipped.length)warnings.push(`${skipped.length} envío(s) entregados o cancelados no se rutearon.`);
     if(dups.length)warnings.push(`${dups.length} envío(s) repetidos en el archivo se tomaron una sola vez: ${dups.slice(0,8).join(', ')}`);
@@ -857,7 +859,7 @@ async function optimize(){
     let Ts=smallReal();
     const smallAll=cfg.small>=cfg.K;
     // Carga: peso (g) y volumen (cm³) por parada contra lo que cabe en una moto
-    const cap=conMedidas?{W:cfg.capKg*1000,V:capVolDe(cfg),dw:[0,...stops.map(s=>s.g)],dv:[0,...stops.map(s=>s.vol)]}:null;
+    const cap=conMedidas?{W:conPeso?cfg.capKg*1000:Infinity,V:conVol?capVolDe(cfg):Infinity,dw:[0,...stops.map(s=>s.g)],dv:[0,...stops.map(s=>s.vol)]}:null;
     const Kcap=cap?Math.max(1,Math.ceil(stops.reduce((a,s)=>a+s.g,0)/cap.W),Math.ceil(stops.reduce((a,s)=>a+s.vol,0)/cap.V)):1;
     const opt=()=>{if(!cfg.small&&!cap&&!cfg.forma)return null;const o=cfg.small?{Ts:plan(smallTs()),S:cfg.small}:{};if(cap)o.C=cap;if(cfg.forma)o.compacta=1;return o;};
     const TP=()=>plan(T);
@@ -936,7 +938,7 @@ async function optimize(){
     const schedN=planN?buildSchedule(planN,T,svc,M,stops,cfg,Ts):null;
     const restrList=[...restr.entries()].map(([i,m])=>({st:stops[i-1],motivo:m}));
     if(cfg.small&&[...(schedN||schedK)].some(r=>r.chica&&r.stops.some(o=>restr.has(stops.indexOf(o.st)+1))))warnings.push('Alguna moto chica quedó con una parada difícil porque no hubo otra opción; revisa las rutas marcadas.');
-    S.result={cap:!!cap,capOver:!!planK.over,Kcap,restrList,cfg,K,N,feasibleK,planK:{sched:schedK},planN:schedN?{sched:schedN}:null,maxK,limit,unreachStops,warnings,trafficSrc,fewer,parcelCount,nStops:n,ttCalls,noPlanN:!feasibleK&&!planN};
+    S.result={cap:!!cap,conPeso,conVol,capOver:!!planK.over,Kcap,restrList,cfg,K,N,feasibleK,planK:{sched:schedK},planN:schedN?{sched:schedN}:null,maxK,limit,unreachStops,warnings,trafficSrc,fewer,parcelCount,nStops:n,ttCalls,noPlanN:!feasibleK&&!planN};
     S.view=schedN?'needed':'given';
     prepararAsignacion('given',schedK);if(schedN)prepararAsignacion('needed',schedN);
     renderResult();setStatus(`Listo · ${hhmm(new Date())}`+((ttCalls+ttCallsPre)?` · ${ttCalls+ttCallsPre} consultas TomTom`:''));setProg(1);
@@ -1033,8 +1035,8 @@ function highlight(i){
 }
 
 // ===== Exportar =====
-const cargaTxt=s=>{const c=v=>v>100.5?'st-bad':v>90?'st-warn':'';return `<span class="${c(s.kgPct)}">${s.kg.toFixed(1)} kg</span> · <span class="${c(s.volPct)}">${Math.round(s.volPct)}% vol</span>`;};
-const cargaPlano=s=>s.kg!=null&&S.result&&S.result.cap?`Carga: ${s.kg.toFixed(1)} kg (${Math.round(s.kgPct)}%) · volumen ${Math.round(s.volPct)}%`:'';
+const cargaTxt=s=>{const c=v=>v>100.5?'st-bad':v>90?'st-warn':'',R=S.result||{};return [R.conPeso&&`<span class="${c(s.kgPct)}">${s.kg.toFixed(1)} kg</span>`,R.conVol&&`<span class="${c(s.volPct)}">${Math.round(s.volPct)}% vol</span>`].filter(Boolean).join(' · ');};
+const cargaPlano=s=>{const R=S.result||{};if(s.kg==null||!R.cap)return'';return 'Carga: '+[R.conPeso&&`${s.kg.toFixed(1)} kg (${Math.round(s.kgPct)}%)`,R.conVol&&`volumen ${Math.round(s.volPct)}%`].filter(Boolean).join(' · ');};
 const pdfSafe=s=>String(s??'').normalize('NFC').replace(/[^\x20-\x7E\xA0-\xFF]/g,'');
 const durTxt=m=>{m=Math.round(m);return Math.floor(m/60)+' h '+String(m%60).padStart(2,'0')+' min';};
 function stopInfo(o,i,R){
