@@ -70,7 +70,7 @@ a{color:var(--info)}
 .tbl tr.sel td{background:var(--chip)}
 .tblwrap{overflow-x:auto;border-radius:12px}
 .dot{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:middle;margin-right:6px}
-.st-ok{color:var(--ok);font-weight:600}.st-bad{color:var(--bad);font-weight:600}
+.st-ok{color:var(--ok);font-weight:600}.st-bad{color:var(--bad);font-weight:600}.st-warn{color:var(--warn);font-weight:600}
 .toggle{display:flex;gap:6px;margin:8px 0}
 .toggle button.on{background:var(--fg);color:var(--bg);border-color:var(--fg)}
 details.route{background:var(--card);border:1px solid var(--line);border-radius:10px;margin:8px 0}
@@ -128,6 +128,14 @@ details.route li span{color:var(--muted)}
           <div><label>Tipo de envío</label><select id="m_tipo"></select></div>
           <div><label>Fecha compromiso</label><select id="m_comp"></select></div>
         </div>
+        <div class="row">
+          <div><label>Largo (cm)</label><select id="m_largo"></select></div>
+          <div><label>Alto (cm)</label><select id="m_alto"></select></div>
+        </div>
+        <div class="row">
+          <div><label>Ancho (cm)</label><select id="m_ancho"></select></div>
+          <div><label>Peso (g)</label><select id="m_peso"></select></div>
+        </div>
         <div class="btns"><button type="button" id="mapReset">Volver a detectar</button></div>
       </div>
       <label class="check"><input type="checkbox" id="skipDone" checked>Omitir entregados y cancelados (columna de estado)</label>
@@ -167,6 +175,20 @@ details.route li span{color:var(--muted)}
         <div><label>+min/envío extra</label><input type="number" id="extra" min="0" value="2"></div>
       </div>
       <div class="hint">La espera es en minutos. “+min/envío extra” se suma cuando una parada tiene varios envíos.</div>
+      <label class="check"><input type="checkbox" id="capOn" checked>Considerar peso y volumen de los paquetes (columnas Largo, Alto, Ancho y Peso)</label>
+      <div class="row">
+        <div><label>Peso máx. por moto (kg)</label><input type="number" id="capKg" min="1" step="1" value="85"></div>
+        <div><label>Aprovechamiento del espacio (%)</label><input type="number" id="capAprov" min="30" max="100" step="5" value="90"></div>
+      </div>
+      <div class="row">
+        <div><label>Parrilla (cm)</label><input type="text" id="capParrilla" value="65x60x70"></div>
+        <div><label>Bolsa (cm)</label><input type="text" id="capBolsa" value="30x30x100"></div>
+      </div>
+      <div class="row">
+        <div><label>Tolerancia de medidas (cm)</label><input type="number" id="capTol" min="0" max="50" step="1" value="5"></div>
+        <div><label>Forma de las rutas</label><select id="forma"><option value="0">Parejas (rayos)</option><option value="0.5" selected>Compactas</option><option value="1">Muy compactas</option></select></div>
+      </div>
+      <div class="hint">Cada moto lleva hasta el peso indicado y el volumen de la parrilla más la bolsa (× aprovechamiento, porque nunca se llena al 100 %). Cada paquete debe caber, girándolo como sea, en la parrilla o en la bolsa; las medidas las captura el vendedor y a veces son del producto y no del empaque: la tolerancia da ese margen. Los que aun así no caben no se quitan: van en moto grande, cuentan como máximo una moto casi llena y salen marcados “⚠ revisar tamaño” para confirmarlos en bodega.<br>“Compactas” junta más las paradas de cada ruta (menos km entre paradas) aunque el traslado inicial sea más largo.</div>
     </div>
 
     <div class="card">
@@ -238,21 +260,25 @@ function replaceDur(r,d,i,y,T,svc){const x=r[i],prev=i===0?0:r[i-1];let nd=d-T[p
 function prefixDur(r,T,svc){const out=new Array(r.length);let t=0,p=0;for(let k=0;k<r.length;k++){t+=T[p][r[k]]+svc[r[k]];out[k]=t;p=r[k];}return out;}
 function suffixDur(r,T,svc){const n=r.length,out=new Array(n);if(!n)return out;out[n-1]=0;for(let k=n-2;k>=0;k--){out[k]=T[r[k]][r[k+1]]+svc[r[k+1]]+out[k+1];}return out;}
 
-function regretInsert(routes,durs,list,TT,svc,cost){
-  const un=list.slice();
+// Capacidad (peso y volumen): C={W,V,dw[],dv[]}; sin C la penalización es 0 y todo funciona igual que antes.
+function capPen(C,w,v){if(!C)return 0;const ow=w>C.W?(w-C.W)/C.W:0,ov=v>C.V?(v-C.V)/C.V:0;return(ow+ov)*1e7+(ow+ov>0?1e5:0);}
+function loadOf(r,C){let w=0,v=0;if(C)for(let k=0;k<r.length;k++){w+=C.dw[r[k]];v+=C.dv[r[k]];}return[w,v];}
+function regretInsert(routes,durs,list,TT,svc,cost,C,loads){
+  const un=list.slice();if(!loads)loads=routes.map(r=>loadOf(r,C));
   while(un.length){
     let bi=-1,br=-1,bp=-1,bd=0,breg=-Infinity,bb1=Infinity;
     for(let u=0;u<un.length;u++){
       const x=un[u];let b1=Infinity,b2=Infinity,r1=-1,p1=-1,d1=0;
       for(let r=0;r<routes.length;r++){
         const rt=routes[r],d=durs[r],c0=cost(d);let rb=Infinity,rp=0,rd=0;
-        for(let p=0;p<=rt.length;p++){const nd=insertDur(rt,d,p,x,TT[r],svc);const dc=cost(nd)-c0;if(dc<rb){rb=dc;rp=p;rd=nd;}}
+        const pc=C?capPen(C,loads[r][0]+C.dw[x],loads[r][1]+C.dv[x])-capPen(C,loads[r][0],loads[r][1]):0;
+        for(let p=0;p<=rt.length;p++){const nd=insertDur(rt,d,p,x,TT[r],svc);const dc=cost(nd)-c0+pc;if(dc<rb){rb=dc;rp=p;rd=nd;}}
         if(rb<b1){b2=b1;b1=rb;r1=r;p1=rp;d1=rd;}else if(rb<b2){b2=rb;}
       }
       const reg=(b2===Infinity?1e15:b2-b1);
       if(reg>breg+1e-9||(Math.abs(reg-breg)<=1e-9&&b1<bb1)){breg=reg;bb1=b1;bi=u;br=r1;bp=p1;bd=d1;}
     }
-    const x=un[bi];routes[br].splice(bp,0,x);durs[br]=bd;un.splice(bi,1);
+    const x=un[bi];routes[br].splice(bp,0,x);durs[br]=bd;un.splice(bi,1);if(C){loads[br][0]+=C.dw[x];loads[br][1]+=C.dv[x];}
   }
 }
 
@@ -278,40 +304,46 @@ function intraOpt(r,T,svc,deadline){
   return{r:best,d:bd};
 }
 
-function localSearch(routes,durs,TT,svc,cost,deadline){
+function localSearch(routes,durs,TT,svc,cost,deadline,C){
   const K=routes.length;let any=true,guard=0;
+  const LD=routes.map(r=>loadOf(r,C));const P=(k,w,v)=>C?capPen(C,w,v)-capPen(C,LD[k][0],LD[k][1]):0;
   while(any&&guard++<100&&Date.now()<deadline){
     any=false;
     for(let a=0;a<K;a++){const o=intraOpt(routes[a],TT[a],svc,deadline);if(o.d<durs[a]-1e-6){routes[a]=o.r;durs[a]=o.d;any=true;}}
     // relocate entre rutas
     for(let a=0;a<K;a++){for(let i=0;i<routes[a].length;i++){
-      const ra=routes[a],x=ra[i],da=durs[a],dr=removeDur(ra,da,i,TT[a],svc),gain=cost(dr)-cost(da);
+      const ra=routes[a],x=ra[i],da=durs[a],dr=removeDur(ra,da,i,TT[a],svc),xw=C?C.dw[x]:0,xv=C?C.dv[x]:0,gain=cost(dr)-cost(da)+P(a,LD[a][0]-xw,LD[a][1]-xv);
       let best=-1e-6,bb=-1,bp=0,bd=0;
-      for(let b=0;b<K;b++){if(b===a)continue;const rb=routes[b],db=durs[b],cb=cost(db);
-        for(let p=0;p<=rb.length;p++){const nd=insertDur(rb,db,p,x,TT[b],svc);const dl=gain+cost(nd)-cb;if(dl<best){best=dl;bb=b;bp=p;bd=nd;}}}
-      if(bb>=0){ra.splice(i,1);durs[a]=dr;routes[bb].splice(bp,0,x);durs[bb]=bd;any=true;i--;}
+      for(let b=0;b<K;b++){if(b===a)continue;const rb=routes[b],db=durs[b],cb=cost(db),pb=P(b,LD[b][0]+xw,LD[b][1]+xv);
+        for(let p=0;p<=rb.length;p++){const nd=insertDur(rb,db,p,x,TT[b],svc);const dl=gain+cost(nd)-cb+pb;if(dl<best){best=dl;bb=b;bp=p;bd=nd;}}}
+      if(bb>=0){ra.splice(i,1);durs[a]=dr;routes[bb].splice(bp,0,x);durs[bb]=bd;LD[a][0]-=xw;LD[a][1]-=xv;LD[bb][0]+=xw;LD[bb][1]+=xv;any=true;i--;}
     }}
     // intercambio entre rutas
     for(let a=0;a<K;a++){for(let b=a+1;b<K;b++){const ra=routes[a],rb=routes[b];
       for(let i=0;i<ra.length;i++){for(let j=0;j<rb.length;j++){
         const x=ra[i],y=rb[j];const na=replaceDur(ra,durs[a],i,y,TT[a],svc),nb=replaceDur(rb,durs[b],j,x,TT[b],svc);
-        const dl=cost(na)+cost(nb)-cost(durs[a])-cost(durs[b]);
-        if(dl<-1e-6){ra[i]=y;rb[j]=x;durs[a]=na;durs[b]=nb;any=true;}
+        const dw=C?C.dw[y]-C.dw[x]:0,dv=C?C.dv[y]-C.dv[x]:0;
+        const dl=cost(na)+cost(nb)-cost(durs[a])-cost(durs[b])+P(a,LD[a][0]+dw,LD[a][1]+dv)+P(b,LD[b][0]-dw,LD[b][1]-dv);
+        if(dl<-1e-6){ra[i]=y;rb[j]=x;durs[a]=na;durs[b]=nb;LD[a][0]+=dw;LD[a][1]+=dv;LD[b][0]-=dw;LD[b][1]-=dv;any=true;}
       }}
     }}
     // intercambio de colas (2-opt*)
     for(let a=0;a<K;a++){for(let b=a+1;b<K;b++){
       const ra=routes[a],rb=routes[b],TA=TT[a],TB=TT[b];const pa=prefixDur(ra,TA,svc),pb=prefixDur(rb,TB,svc),sa=suffixDur(ra,TB,svc),sb=suffixDur(rb,TA,svc);
       const c0=cost(durs[a])+cost(durs[b]);let best=-1e-6,bi=-2,bj=-2,bA=0,bB=0;
+      const lwA=[],lvA=[],lwB=[],lvB=[];if(C){let w=0,v=0;ra.forEach((x,k)=>{w+=C.dw[x];v+=C.dv[x];lwA[k]=w;lvA[k]=v;});w=0;v=0;rb.forEach((x,k)=>{w+=C.dw[x];v+=C.dv[x];lwB[k]=w;lvB[k]=v;});}
       for(let i=-1;i<ra.length;i++){const xa=i<0?0:ra[i],preA=i<0?0:pa[i];
         for(let j=-1;j<rb.length;j++){
           if(i===ra.length-1&&j===rb.length-1)continue;if(i===-1&&j===-1)continue;
           const xb=j<0?0:rb[j],preB=j<0?0:pb[j];
           const nA=preA+(j+1<rb.length?TA[xa][rb[j+1]]+svc[rb[j+1]]+sb[j+1]:0);
           const nB=preB+(i+1<ra.length?TB[xb][ra[i+1]]+svc[ra[i+1]]+sa[i+1]:0);
-          const dl=cost(nA)+cost(nB)-c0;if(dl<best){best=dl;bi=i;bj=j;bA=nA;bB=nB;}
+          let dl=cost(nA)+cost(nB)-c0;
+          if(C){const wA=(i<0?0:lwA[i]),vA=(i<0?0:lvA[i]),wB=(j<0?0:lwB[j]),vB=(j<0?0:lvB[j]);
+            dl+=P(a,wA+LD[b][0]-wB,vA+LD[b][1]-vB)+P(b,wB+LD[a][0]-wA,vB+LD[a][1]-vA);}
+          if(dl<best){best=dl;bi=i;bj=j;bA=nA;bB=nB;}
         }}
-      if(bi>-2){routes[a]=ra.slice(0,bi+1).concat(rb.slice(bj+1));routes[b]=rb.slice(0,bj+1).concat(ra.slice(bi+1));durs[a]=bA;durs[b]=bB;any=true;}
+      if(bi>-2){routes[a]=ra.slice(0,bi+1).concat(rb.slice(bj+1));routes[b]=rb.slice(0,bj+1).concat(ra.slice(bi+1));durs[a]=bA;durs[b]=bB;LD[a]=loadOf(routes[a],C);LD[b]=loadOf(routes[b],C);any=true;}
     }}
   }
 }
@@ -331,14 +363,17 @@ function solve(T,svc,nodes,K,L,ms,seed,opt){
   const TT=[];for(let k=0;k<K;k++)TT.push(k<SM?Ts:T);
   if(SM){const okS=seeds.filter(function(x){return Ts[0][x]<1e6;}),noS=seeds.filter(function(x){return Ts[0][x]>=1e6;});
     const ord=[];for(let k=0;k<K;k++)ord.push(k<SM?(okS.length?okS.shift():noS.shift()):(noS.length?noS.shift():okS.shift()));seeds.length=0;ord.forEach(function(x){seeds.push(x);});}
+  const C=opt&&opt.C?opt.C:null;
   let routes=seeds.map(function(s){return[s];});let durs=routes.map(function(r,k){return routeDur(r,TT[k],svc);});
-  regretInsert(routes,durs,nodes.filter(function(x){return!isSeed.has(x);}),TT,svc,cost);
-  localSearch(routes,durs,TT,svc,cost,deadline+ms);
-  const tot=function(D){let s=0;for(const d of D)s+=cost(d);return s;};
+  regretInsert(routes,durs,nodes.filter(function(x){return!isSeed.has(x);}),TT,svc,cost,C);
+  localSearch(routes,durs,TT,svc,cost,deadline+ms,C);
+  const penR=function(R){let s=0;if(C)for(const r of R){const l=loadOf(r,C);s+=capPen(C,l[0],l[1]);}return s;};
+  const tot=function(D,R){let s=0;for(const d of D)s+=cost(d);return s+(R?penR(R):0);};
   const mx=function(D){let m=0;for(const d of D)if(d>m)m=d;return m;};
-  const better=function(D,C,bD,bC){const a=mx(D),b=mx(bD);if(a<b-30)return true;if(a>b+30)return false;return C<bC-1e-6;};
-  let cur={routes:routes.map(function(r){return r.slice();}),durs:durs.slice()},curC=tot(durs);
-  let best={routes:cur.routes.map(function(r){return r.slice();}),durs:cur.durs.slice()},bestC=curC,iters=0;
+  const compacta=!!(opt&&opt.compacta);
+  const better=function(D,Cc,bD,bC,P,bP){if(P<bP-1)return true;if(P>bP+1)return false;if(compacta)return Cc<bC-1e-6;const a=mx(D),b=mx(bD);if(a<b-30)return true;if(a>b+30)return false;return Cc<bC-1e-6;};
+  let cur={routes:routes.map(function(r){return r.slice();}),durs:durs.slice()},curC=tot(durs,routes);
+  let best={routes:cur.routes.map(function(r){return r.slice();}),durs:cur.durs.slice()},bestC=curC,bestP=penR(routes),iters=0;
   while(Date.now()<deadline){
     iters++;
     const R=cur.routes.map(function(r){return r.slice();});
@@ -354,14 +389,15 @@ function solve(T,svc,nodes,K,L,ms,seed,opt){
     for(let k=0;k<R.length;k++)R[k]=R[k].filter(function(x){return!removed.has(x);});
     const D=R.map(function(r,k){return routeDur(r,TT[k],svc);});
     const rem=Array.from(removed);for(let i=rem.length-1;i>0;i--){const j=Math.floor(rnd()*(i+1));const t=rem[i];rem[i]=rem[j];rem[j]=t;}
-    regretInsert(R,D,rem,TT,svc,cost);
-    localSearch(R,D,TT,svc,cost,deadline+ms*0.25);
-    const C=tot(D);const frac=Math.min(1,(Date.now()-t0)/ms);
-    if(C<curC*(1+0.01*(1-frac))){cur={routes:R,durs:D};curC=C;}
-    if(better(D,C,best.durs,bestC)){best={routes:R.map(function(r){return r.slice();}),durs:D.slice()};bestC=C;}
+    regretInsert(R,D,rem,TT,svc,cost,C);
+    localSearch(R,D,TT,svc,cost,deadline+ms*0.25,C);
+    const Cn=tot(D,R),Pn=penR(R);const frac=Math.min(1,(Date.now()-t0)/ms);
+    if(Cn<curC*(1+0.01*(1-frac))){cur={routes:R,durs:D};curC=Cn;}
+    if(better(D,Cn,best.durs,bestC,Pn,bestP)){best={routes:R.map(function(r){return r.slice();}),durs:D.slice()};bestC=Cn;bestP=Pn;}
   }
   best.durs=best.routes.map(function(r,k){return routeDur(r,TT[k],svc);});
   best.iters=iters;best.S=SM;
+  if(C){best.loads=best.routes.map(function(r){return loadOf(r,C);});best.over=best.loads.filter(function(l){return l[0]>C.W+1e-6||l[1]>C.V+1e-6;}).length;}else best.over=0;
   return best;
 }
 /*CORE-END*/
@@ -400,7 +436,7 @@ const S={srv:null,headers:[],rows:[],matrix:null,matrixKey:'',result:null,view:'
 let worker=null;
 function getWorker(){
   if(worker)return worker;
-  const fns=[mulberry32,routeDur,insertDur,removeDur,replaceDur,prefixDur,suffixDur,regretInsert,intraOpt,localSearch,solve];
+  const fns=[mulberry32,routeDur,insertDur,removeDur,replaceDur,prefixDur,suffixDur,capPen,loadOf,regretInsert,intraOpt,localSearch,solve];
   const src=fns.map(f=>f.toString()).join('\n')+'\nonmessage=function(e){var a=e.data;postMessage(solve(a.T,a.svc,a.nodes,a.K,a.L,a.ms,a.seed,a.opt));};';
   worker=new Worker(URL.createObjectURL(new Blob([src],{type:'text/javascript'})));
   return worker;
@@ -422,12 +458,19 @@ function readCfg(){
   const date=$('date').value;const start=new Date(`${date}T${$('tStart').value}:00`),end=new Date(`${date}T${$('tEnd').value}:00`);
   return{date,start,end,K:Math.max(1,(parseInt($('big').value)||0)+(parseInt($('small').value)||0)),big:Math.max(0,parseInt($('big').value)||0),wait:Math.max(0,parseFloat($('wait').value)||0),extra:Math.max(0,parseFloat($('extra').value)||0),
     group:$('group').checked,factor:parseFloat($('factor').value)||1.5,adj:parseFloat($('adj').value)||1,small:Math.max(0,parseInt($('small').value)||0),smallZone:$('smallZone').value,grp:$('grp').value,grpPen:Math.max(0,parseFloat($('grpPen').value)||0)*60,altOn:$('altOn').checked,motoOn:$('motoOn').checked,cerroSens:$('cerroSens').value,smallPen:Math.max(0,parseFloat($('smallPen').value)||0)/100,useTT:!!(S.srv&&S.srv.tomtom),ttMode:$('ttMode').value,
+    capOn:$('capOn').checked,capKg:Math.max(1,parseFloat($('capKg').value)||85),capAprov:Math.min(1,Math.max(0.3,(parseFloat($('capAprov').value)||90)/100)),
+    espacios:[medidas($('capParrilla').value,[65,60,70]),medidas($('capBolsa').value,[30,30,100])],capTol:Math.max(0,parseFloat($('capTol').value)||0),forma:Math.max(0,parseFloat($('forma').value)||0),
     ms:parseInt($('quality').value)||4000,pw:Math.min(80,Math.max(40,parseFloat($('pw').value)||72)),fs:parseFloat($('fs').value)||1.15,skipDone:$('skipDone').checked,depot:{lat:parseFloat($('dLat').value),lng:parseFloat($('dLng').value)}};
 }
-const PERSIST=['tStart','tEnd','big','wait','extra','ttMode','adj','quality','pw','fs','small','cerroSens','smallPen','smallZone','grp','grpPen'];
+/** "65x60x70" → [65,60,70] (cm). */
+function medidas(t,def){const v=String(t||'').split(/[^0-9.]+/).map(Number).filter(n=>n>0);return v.length===3?v:def;}
+/** ¿Cabe un paquete (cm) en un espacio (cm), girándolo como sea? */
+function capVolDe(cfg){return cfg.espacios.reduce((a,e)=>a+e[0]*e[1]*e[2],0)*cfg.capAprov;}
+function cabeEn(p,e,tol){tol=tol||0;const a=p.slice().sort((x,y)=>x-y),b=e.slice().sort((x,y)=>x-y);return a[0]<=b[0]+tol&&a[1]<=b[1]+tol&&a[2]<=b[2]+tol;}
+const PERSIST=['tStart','tEnd','big','wait','extra','ttMode','adj','quality','pw','fs','small','cerroSens','smallPen','smallZone','grp','grpPen','capKg','capAprov','capParrilla','capBolsa','capTol','forma'];
 function loadSettings(){
   PERSIST.forEach(id=>{const v=store.get('f.'+id,null);if(v!==null&&$(id))$(id).value=v;});
-  ['group','skipDone','altOn','motoOn'].forEach(id=>{const v=store.get('f.'+id,null);if(v!==null)$(id).checked=v;});
+  ['group','skipDone','altOn','motoOn','capOn'].forEach(id=>{const v=store.get('f.'+id,null);if(v!==null)$(id).checked=v;});
   const d=store.get('depot',DEFAULT_DEPOT);$('dLat').value=d.lat.toFixed(6);$('dLng').value=d.lng.toFixed(6);
   const t=new Date();$('date').value=`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
   refreshFactor();
@@ -436,7 +479,7 @@ function totalMotos(){const b=parseInt($('big').value)||0,c=parseInt($('small').
 function bindSettings(){
   ['big','small'].forEach(id=>$(id).addEventListener('input',totalMotos));setTimeout(totalMotos,0);
   PERSIST.forEach(id=>$(id).addEventListener('change',()=>store.set('f.'+id,$(id).value)));
-  ['group','skipDone','altOn','motoOn'].forEach(id=>$(id).addEventListener('change',()=>store.set('f.'+id,$(id).checked)));
+  ['group','skipDone','altOn','motoOn','capOn'].forEach(id=>$(id).addEventListener('change',()=>store.set('f.'+id,$(id).checked)));
   $('tStart').addEventListener('change',refreshFactor);
   $('factor').addEventListener('input',()=>{S.factorTouched=true;});
   ['dLat','dLng'].forEach(id=>$(id).addEventListener('change',()=>setDepot(parseFloat($('dLat').value),parseFloat($('dLng').value))));
@@ -471,7 +514,11 @@ const FIELDS=[
   {id:'m_comp',k:'comp',exact:['requesteddeliverytime','fechacompromiso','compromiso','fechadeentrega'],re:/^(requesteddelivery|fechacompromiso|compromiso)/},
   {id:'m_estado',k:'estado',exact:['estadoml','status','estatus','estadoenvio'],re:/^(estadoml|estatus|status)$/},
   {id:'m_tipo',k:'tipo',exact:['shippingmethodtype','tipo','tipoenvio','servicio'],re:/^(shippingmethodtype|tipoenvio)/},
-  {id:'m_espera',k:'espera',exact:['espera','esperamin','tiempoespera','minutosespera'],re:/^(espera|tiempoespera)/}
+  {id:'m_espera',k:'espera',exact:['espera','esperamin','tiempoespera','minutosespera'],re:/^(espera|tiempoespera)/},
+  {id:'m_largo',k:'largo',exact:['largocm','largo','length','largom'],re:/^(largo|length)/},
+  {id:'m_alto',k:'alto',exact:['altocm','alto','height'],re:/^(alto|height)/},
+  {id:'m_ancho',k:'ancho',exact:['anchocm','ancho','width'],re:/^(ancho|width)/},
+  {id:'m_peso',k:'peso',exact:['pesog','peso','weight','pesogr','pesogramos'],re:/^(peso|weight)/}
 ];
 function detectCol(h,F){
   const n=h.map(norm);
@@ -524,7 +571,8 @@ function zonaDe(p){
 }
 function buildStops(cfg){
   const m=getMap();if(m.lat<0||m.lng<0)throw new Error('Selecciona las columnas de latitud y longitud.');
-  const bad=[],parcels=[],outside=[],skipped=[],dups=[];const seen=new Set();
+  const bad=[],parcels=[],outside=[],skipped=[],dups=[],noCabe=[];let sinMedidas=0;const seen=new Set();
+  const conMedidas=cfg.capOn&&m.largo>=0&&m.alto>=0&&m.ancho>=0&&m.peso>=0;
   S.rows.forEach((r,i)=>{
     const id=cell(r,m.envio)||('Fila '+(i+2));
     if(cfg.skipDone&&m.estado>=0&&DONE_STATES.test(cell(r,m.estado))){skipped.push(id);return;}
@@ -538,7 +586,15 @@ function buildStops(cfg){
     const comp=fmtCompromiso(m.comp>=0?r[m.comp]:'');
     const ref=cell(r,m.name);const tipo=cell(r,m.tipo).toLowerCase();
     const esp=m.espera>=0?parseNum(r[m.espera]):NaN;
-    parcels.push({id,dir,calle,city,edo:edo.replace(/^Distrito Federal$/i,'CDMX').replace(/^Estado de M[eé]xico$/i,'Edo. Méx.'),cp,comp,ref,tipo,lat,lng,esp});
+    let dims=null,g=0;
+    if(conMedidas){const d=[parseNum(r[m.largo]),parseNum(r[m.alto]),parseNum(r[m.ancho])];g=parseNum(r[m.peso]);
+      if(d.every(x=>isFinite(x)&&x>0)){dims=d;}else sinMedidas++;
+      if(!isFinite(g)||g<0)g=0;
+      if((dims&&!cfg.espacios.some(e=>cabeEn(dims,e,cfg.capTol)))||g>cfg.capKg*1000)noCabe.push({id,dims:dims||[0,0,0],g,dir:calle});}
+    const revisar=conMedidas&&noCabe.length&&noCabe[noCabe.length-1].id===id;
+    parcels.push({revisar,id,dir,calle,city,edo:edo.replace(/^Distrito Federal$/i,'CDMX').replace(/^Estado de M[eé]xico$/i,'Edo. Méx.'),cp,comp,ref,tipo,lat,lng,esp,
+      dims,g,vol:dims?dims[0]*dims[1]*dims[2]:0});
+    if(revisar){const pp=parcels[parcels.length-1];pp.g=Math.min(pp.g,cfg.capKg*1000*0.9);pp.vol=Math.min(pp.vol,capVolDe(cfg)*0.9);}
   });
   const stops=[],byKey=new Map();
   for(const p of parcels){
@@ -552,12 +608,16 @@ function buildStops(cfg){
     const explicit=s.parcels.map(p=>p.esp).filter(v=>isFinite(v)&&v>=0);
     const base=explicit.length?Math.max(...explicit):cfg.wait;
     s.svcMin=base+cfg.extra*(s.parcels.length-1);
+    s.g=s.parcels.reduce((a,p)=>a+(p.g||0),0);s.vol=s.parcels.reduce((a,p)=>a+(p.vol||0),0);s.revisar=s.parcels.some(p=>p.revisar);
+    if(conMedidas){s.g=Math.min(s.g,cfg.capKg*1000*0.95);s.vol=Math.min(s.vol,capVolDe(cfg)*0.95);} // una parada siempre cabe en una moto
   }
-  return{stops,bad,outside,skipped,dups,parcelCount:parcels.length};
+  return{stops,bad,outside,skipped,dups,parcelCount:parcels.length,noCabe,sinMedidas,conMedidas};
 }
 function updateFileInfo(){
-  try{const {stops,bad,skipped,dups,parcelCount}=buildStops(readCfg());
-    $('fileInfo').textContent=`${S.fileName}: ${parcelCount} envíos a rutear en ${stops.length} paradas`+(skipped.length?` · ${skipped.length} entregados/cancelados omitidos`:'')+(dups.length?` · ${dups.length} duplicados omitidos`:'')+(bad.length?` · ${bad.length} sin coordenadas`:'');
+  try{const cfg=readCfg();const {stops,bad,skipped,dups,parcelCount,noCabe,conMedidas}=buildStops(cfg);
+    const kg=stops.reduce((a,s)=>a+s.g,0)/1000,vol=stops.reduce((a,s)=>a+s.vol,0);
+    $('fileInfo').textContent=`${S.fileName}: ${parcelCount} envíos a rutear en ${stops.length} paradas`+(skipped.length?` · ${skipped.length} entregados/cancelados omitidos`:'')+(dups.length?` · ${dups.length} duplicados omitidos`:'')+(bad.length?` · ${bad.length} sin coordenadas`:'')+
+      (conMedidas?` · carga ${kg.toFixed(0)} kg y ${(vol/1000).toFixed(0)} L (mínimo ${Math.max(Math.ceil(kg/cfg.capKg),Math.ceil(vol/capVolDe(cfg)))} motos por carga)`+(noCabe.length?` · ${noCabe.length} no caben en moto`:''):'');
   }catch(e){$('fileInfo').textContent=`${S.fileName}: ${S.rows.length} filas · falta mapear columnas`;}
 }
 function previewStops(){
@@ -722,7 +782,8 @@ function buildSchedule(plan,T0,svc,M,stops,cfg,Ts){
     });
     const end=new Date(t);
     const durMin=(end-cfg.start)/60000;
-    return{chica,zona:zonaRuta(out),total:used.length,stops:out,start:cfg.start,end,deadline:cfg.end,km,durMin,
+    const g=out.reduce((a,o)=>a+(o.st.g||0),0),vol=out.reduce((a,o)=>a+(o.st.vol||0),0);
+    return{kg:g/1000,kgPct:g/(cfg.capKg*1000)*100,volPct:vol/capVolDe(cfg)*100,volL:vol/1000,chica,zona:zonaRuta(out),total:used.length,stops:out,start:cfg.start,end,deadline:cfg.end,km,durMin,
       latest:new Date(Math.max(cfg.start.getTime(),cfg.end.getTime()-durMin*60000)),
       parcels:out.reduce((a,s)=>a+s.st.parcels.length,0),slackMin:(cfg.end-end)/60000,geom,traffic:!!(plan.ev&&plan.ev[o.ri])};
   });
@@ -745,7 +806,10 @@ async function optimize(){
     if(!isFinite(cfg.depot.lat)||!isFinite(cfg.depot.lng))throw new Error('Revisa las coordenadas del origen.');
     if(!(cfg.end>cfg.start))throw new Error('La hora máxima de término debe ser después de la hora de salida.');
     if(!checkMapping())throw new Error('Faltan columnas por mapear (marcadas en rojo).');
-    const {stops,bad,outside,skipped,dups,parcelCount}=buildStops(cfg);
+    const {stops,bad,outside,skipped,dups,parcelCount,noCabe,sinMedidas,conMedidas}=buildStops(cfg);
+    if(noCabe.length)warnings.push(`${noCabe.length} envío(s) con medidas que no caben en la parrilla ni en la bolsa (aun con ${cfg.capTol} cm de tolerancia) o de más de ${cfg.capKg} kg: van en moto grande y salen marcados “⚠ revisar tamaño” en el ticket para confirmarlos en bodega: `+noCabe.slice(0,12).map(x=>`${x.id} (${x.dims.join('×')} cm, ${(x.g/1000).toFixed(1)} kg)`).join(', ')+(noCabe.length>12?'…':''));
+    if(conMedidas&&sinMedidas)warnings.push(`${sinMedidas} envío(s) sin medidas en el Excel: cuentan solo su peso.`);
+    if(cfg.capOn&&!conMedidas)warnings.push('El Excel no trae las columnas Largo, Alto, Ancho y Peso (o no están mapeadas): las rutas no consideran la carga.');
     if(!stops.length)throw new Error('No hay envíos con coordenadas válidas.');
     if(skipped.length)warnings.push(`${skipped.length} envío(s) entregados o cancelados no se rutearon.`);
     if(dups.length)warnings.push(`${dups.length} envío(s) repetidos en el archivo se tomaron una sola vez: ${dups.slice(0,8).join(', ')}`);
@@ -762,6 +826,7 @@ async function optimize(){
     // Motos chicas: paradas a las que solo puede ir una moto grande (cerro por altitud o solo por autopista)
     const restr=new Map();
     if(cfg.small>0&&cfg.smallZone==='cdmx')stops.forEach((s,i)=>{if(s.estado!=='CDMX')restr.set(i+1,s.estado==='Edo. Méx.'?'Edo. Méx.: solo moto grande':'sin estado conocido: solo moto grande');});
+    if(cfg.small>0)stops.forEach((s,i)=>{if(s.revisar&&!restr.has(i+1))restr.set(i+1,'paquete grande (revisar medidas): solo moto grande');});
     if(cfg.small>0&&cfg.altOn){
       setStatus('Revisando altitud de las paradas (motos chicas)…');
       try{const c=await cerros(cfg.depot,stops,cfg.cerroSens,p=>setStatus(`Revisando relieve de las paradas (motos chicas)… ${Math.round(p*100)}%`));
@@ -784,12 +849,17 @@ async function optimize(){
     let fS=null;
     // Zona de cada nodo para agrupar: cambiar de zona (sin contar la salida de la base) le cuesta grpPen al optimizador
     const zkey=[''].concat(stops.map(s=>cfg.grp==='alcaldia'?norm(s.estado+'|'+s.alcaldia):cfg.grp==='estado'?s.estado:''));
-    const plan=Mx=>cfg.grp&&cfg.grpPen?Mx.map((row,i)=>row.map((v,j)=>i&&j&&i!==j&&zkey[i]!==zkey[j]&&v<1e6?v+cfg.grpPen:v)):Mx;
+    const fc=1+cfg.forma;
+    const plan=Mx=>(cfg.grp&&cfg.grpPen)||cfg.forma?Mx.map((row,i)=>row.map((v,j)=>{if(!i||!j||i===j||v>=1e6)return v;let x=v*fc;if(cfg.grp&&cfg.grpPen&&zkey[i]!==zkey[j])x+=cfg.grpPen*fc;return x;})):Mx;
+    const LP=limit*(1+cfg.forma*0.5); // límite para el optimizador (los tiempos reales se revisan contra el límite verdadero)
     const smallReal=()=>{if(!cfg.small)return null;const k=fS||f*(1+cfg.smallPen);return M.dur.map(row=>row.map(v=>v*k));};
     const smallTs=()=>{if(!cfg.small)return null;const R=smallReal();return R.map((row,i)=>row.map((v,j)=>(restr.has(i)||restr.has(j))&&i!==j?1e7:v));};
     let Ts=smallReal();
     const smallAll=cfg.small>=cfg.K;
-    const opt=()=>cfg.small?{Ts:plan(smallTs()),S:cfg.small}:null;
+    // Carga: peso (g) y volumen (cm³) por parada contra lo que cabe en una moto
+    const cap=conMedidas?{W:cfg.capKg*1000,V:capVolDe(cfg),dw:[0,...stops.map(s=>s.g)],dv:[0,...stops.map(s=>s.vol)]}:null;
+    const Kcap=cap?Math.max(1,Math.ceil(stops.reduce((a,s)=>a+s.g,0)/cap.W),Math.ceil(stops.reduce((a,s)=>a+s.vol,0)/cap.V)):1;
+    const opt=()=>{if(!cfg.small&&!cap&&!cfg.forma)return null;const o=cfg.small?{Ts:plan(smallTs()),S:cfg.small}:{};if(cap)o.C=cap;if(cfg.forma)o.compacta=1;return o;};
     const TP=()=>plan(T);
     const reachable=()=>{const a=[],u=[];for(let i=1;i<=n;i++)((T[0][i]+svc[i]>limit)||(smallAll&&restr.has(i))?u:a).push(i);return{a,u};};
     if(smallAll&&restr.size)warnings.push(`Todas las motos son chicas: ${restr.size} parada(s) que necesitan moto grande quedaron sin ruta.`);
@@ -797,7 +867,7 @@ async function optimize(){
     const K=Math.min(cfg.K,Math.max(1,active.length));
 
     setStatus(`Armando ${K} ruta(s)…`);setProg(0.45);
-    let planK=await solveAsync(TP(),svc,active,K,limit,cfg.ms,7,opt());
+    let planK=await solveAsync(TP(),svc,active,K,LP,cfg.ms,7,opt());
 
     if(ttOk){
       try{
@@ -812,7 +882,7 @@ async function optimize(){
           if(!changed||round>=2)break;
           ({a:active}=reachable());
           setStatus('Reoptimizando con el tráfico medido…');
-          planK=await solveAsync(TP(),svc,active,Math.min(K,Math.max(1,active.length)),limit,cfg.ms,11+round,opt());
+          planK=await solveAsync(TP(),svc,active,Math.min(K,Math.max(1,active.length)),LP,cfg.ms,11+round,opt());
         }
         if(fCal){const h=cfg.start.getHours();const cal=store.get('calib',{});cal[h]=cal[h]?cal[h]*0.5+fCal*0.5:fCal;store.set('calib',cal);
           trafficSrc=`TomTom (tráfico ${cfg.start.getTime()>Date.now()+60000?'previsto para la hora de salida':'en tiempo real'}) · factor medido ×${fCal.toFixed(2)}`;
@@ -824,27 +894,27 @@ async function optimize(){
     active=active.filter(i=>!unreach.includes(i));
 
     const dK=planDurs(planK,T,svc,cfg,Ts);const maxK=Math.max(0,...dK);
-    const feasibleK=maxK<=limit+1;
+    const feasibleK=maxK<=limit+1&&!planK.over;
     let planN=null,N=K;
 
     if(!feasibleK){
       const sumK=dK.reduce((a,b)=>a+b,0);
-      let k=Math.max(K+1,Math.ceil(sumK/limit));
+      let k=Math.max(K+1,Math.ceil(sumK/limit),Kcap);
       while(k<=active.length){
         setStatus(`No alcanza con ${K}. Probando con ${k} repartidores…`);setProg(0.7);
-        const p=await solveAsync(TP(),svc,active,k,limit,Math.max(1200,cfg.ms*0.6),100+k,opt());
+        const p=await solveAsync(TP(),svc,active,k,LP,Math.max(1200,cfg.ms*0.6),100+k,opt());
         let d=planDurs(p,T,svc,cfg,Ts);
-        if(Math.max(...d)<=limit+1){
+        if(Math.max(...d)<=limit+1&&!p.over){
           if(ttOk){try{setStatus(`Validando ${k} rutas con TomTom…`);p.ev=await evalTomTom(p,pts,cfg,null);ttCalls+=k;d=planDurs(p,T,svc,cfg,Ts);}catch(err){ttOk=false;p.ev=null;warnings.push(err.message);}}
-          if(Math.max(...d)<=limit+1){planN=p;N=k;break;}
+          if(Math.max(...d)<=limit+1&&!p.over){planN=p;N=k;break;}
         }
         k++;
       }
       if(planN&&N>K+1){
         for(let k2=N-1;k2>K;k2--){
           setStatus(`Verificando si bastan ${k2}…`);
-          const p=await solveAsync(TP(),svc,active,k2,limit,Math.max(1200,cfg.ms*0.6),300+k2,opt());
-          let d=planDurs(p,T,svc,cfg,Ts);if(Math.max(...d)>limit+1)break;
+          const p=await solveAsync(TP(),svc,active,k2,LP,Math.max(1200,cfg.ms*0.6),300+k2,opt());
+          let d=planDurs(p,T,svc,cfg,Ts);if(Math.max(...d)>limit+1||p.over)break;
           if(ttOk){try{p.ev=await evalTomTom(p,pts,cfg,null);ttCalls+=k2;d=planDurs(p,T,svc,cfg,Ts);}catch(err){break;}}
           if(Math.max(...d)>limit+1)break;planN=p;N=k2;
         }
@@ -866,7 +936,7 @@ async function optimize(){
     const schedN=planN?buildSchedule(planN,T,svc,M,stops,cfg,Ts):null;
     const restrList=[...restr.entries()].map(([i,m])=>({st:stops[i-1],motivo:m}));
     if(cfg.small&&[...(schedN||schedK)].some(r=>r.chica&&r.stops.some(o=>restr.has(stops.indexOf(o.st)+1))))warnings.push('Alguna moto chica quedó con una parada difícil porque no hubo otra opción; revisa las rutas marcadas.');
-    S.result={restrList,cfg,K,N,feasibleK,planK:{sched:schedK},planN:schedN?{sched:schedN}:null,maxK,limit,unreachStops,warnings,trafficSrc,fewer,parcelCount,nStops:n,ttCalls,noPlanN:!feasibleK&&!planN};
+    S.result={cap:!!cap,capOver:!!planK.over,Kcap,restrList,cfg,K,N,feasibleK,planK:{sched:schedK},planN:schedN?{sched:schedN}:null,maxK,limit,unreachStops,warnings,trafficSrc,fewer,parcelCount,nStops:n,ttCalls,noPlanN:!feasibleK&&!planN};
     S.view=schedN?'needed':'given';
     prepararAsignacion('given',schedK);if(schedN)prepararAsignacion('needed',schedN);
     renderResult();setStatus(`Listo · ${hhmm(new Date())}`+((ttCalls+ttCallsPre)?` · ${ttCalls+ttCallsPre} consultas TomTom`:''));setProg(1);
@@ -884,7 +954,9 @@ function renderResult(){
   if(!R.feasibleK){
     const late=Math.round((R.maxK-R.limit)/60);
     if(R.planN){
-      h+=`<div class="alert bad"><span class="big">Faltan ${R.N-R.K} repartidor${R.N-R.K>1?'es':''} con moto grande</span>Con ${R.K} no terminas antes de las ${hhmm(cfg.end)}: la mejor distribución acaba a las ${hhmm(new Date(cfg.start.getTime()+R.maxK*1000))} (${late} min tarde). Necesitas <b>${R.N} repartidores</b>; abajo están las ${R.N} rutas que sí terminan a tiempo.</div>`;
+      h+=R.capOver&&R.maxK<=R.limit+1
+        ?`<div class="alert bad"><span class="big">Faltan ${R.N-R.K} repartidor${R.N-R.K>1?'es':''} por carga</span>Con ${R.K} motos no cabe todo: alguna ruta pasaría del peso (${cfg.capKg} kg) o del espacio de la parrilla y la bolsa. Por carga se necesitan al menos ${R.Kcap}. Necesitas <b>${R.N} repartidores</b>; abajo están las ${R.N} rutas que sí caben y terminan a tiempo.</div>`
+        :`<div class="alert bad"><span class="big">Faltan ${R.N-R.K} repartidor${R.N-R.K>1?'es':''} con moto grande</span>Con ${R.K} no terminas antes de las ${hhmm(cfg.end)}: la mejor distribución acaba a las ${hhmm(new Date(cfg.start.getTime()+R.maxK*1000))} (${late} min tarde)${R.capOver?' y además no cabe toda la carga':''}. Necesitas <b>${R.N} repartidores</b>; abajo están las ${R.N} rutas que sí terminan a tiempo.</div>`;
     }else{
       h+=`<div class="alert bad"><span class="big">No es posible terminar a tiempo</span>Ni con un repartidor por parada se termina antes de las ${hhmm(cfg.end)}. Amplía el horario o reduce la espera por parada.</div>`;
     }
@@ -908,9 +980,9 @@ function renderResult(){
   <div class="hint" style="margin-bottom:8px">Tiempos: ${esc(R.trafficSrc)}</div>
   <div class="btns" style="margin-bottom:10px"><button id="pubBtn" style="background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600">Publicar en la super app</button><button id="printAll">Imprimir tickets (todas)</button><button id="pdfAll">PDF 80 mm (todas)</button><button id="xlsOut">Excel de rutas</button></div>
   <div class="hint" style="margin-bottom:6px">Ordenadas por <b>prioridad de despacho</b>: la ruta 1 es la más larga y debe salir primero; la última es la más corta y puede salir al final. *Termina = saliendo a la hora de salida indicada.</div>
-  ${asigBanner()}<div class="tblwrap"><table class="tbl"><thead><tr><th>Prioridad</th><th>Moto · zona</th><th>Paradas</th><th>Envíos</th><th>Km</th><th>Duración</th><th>Salir a más tardar</th><th>Termina*</th><th>Holgura</th><th>Estado</th><th>Repartidor</th><th></th></tr></thead><tbody>`;
+  ${asigBanner()}<div class="tblwrap"><table class="tbl"><thead><tr><th>Prioridad</th><th>Moto · zona</th><th>Paradas</th><th>Envíos</th>${R.cap?'<th>Carga</th>':''}<th>Km</th><th>Duración</th><th>Salir a más tardar</th><th>Termina*</th><th>Holgura</th><th>Estado</th><th>Repartidor</th><th></th></tr></thead><tbody>`;
   sched.forEach((s,i)=>{const ok=s.slackMin>=-0.5;
-    h+=`<tr data-i="${i}"><td><span class="dot" style="background:${s.color}"></span>Ruta ${s.num}</td><td style="white-space:normal;min-width:170px"><span style="font-size:11px;padding:1px 6px;border-radius:6px;background:${s.chica?'var(--info-bg)':'var(--chip)'};color:${s.chica?'var(--info)':'var(--fg)'};font-weight:600">${s.chica?'🛵 Chica':'🏍️ Grande'}</span> <span class="muted" style="font-size:12px">${esc(s.zona)}</span></td><td>${s.stops.length}</td><td>${s.parcels}</td><td>${s.km.toFixed(1)}</td><td>${durTxt(s.durMin)}</td><td><b>${hhmm(s.latest)}</b></td><td>${hhmm(s.end)}</td><td>${Math.round(s.slackMin)} min</td><td class="${ok?'st-ok':'st-bad'}">${ok?'A tiempo':'Tarde'}</td><td style="white-space:normal"><select class="emp" data-emp="${i}" style="min-width:190px;padding:5px">${empOptions()}</select><div class="sug" id="sug${i}"></div></td><td style="display:flex;gap:4px"><button data-print="${i}">Imprimir</button><button data-pdf="${i}">PDF</button><button data-wa="${i}" style="background:#25D366;border-color:#25D366;color:#fff">WhatsApp</button><button data-copy="${i}">Copiar</button></td></tr>`;});
+    h+=`<tr data-i="${i}"><td><span class="dot" style="background:${s.color}"></span>Ruta ${s.num}</td><td style="white-space:normal;min-width:170px"><span style="font-size:11px;padding:1px 6px;border-radius:6px;background:${s.chica?'var(--info-bg)':'var(--chip)'};color:${s.chica?'var(--info)':'var(--fg)'};font-weight:600">${s.chica?'🛵 Chica':'🏍️ Grande'}</span> <span class="muted" style="font-size:12px">${esc(s.zona)}</span></td><td>${s.stops.length}</td><td>${s.parcels}</td>${R.cap?`<td style="white-space:nowrap" title="Peso ${s.kg.toFixed(1)} kg de ${cfg.capKg} · volumen ${s.volL.toFixed(0)} L">${cargaTxt(s)}</td>`:''}<td>${s.km.toFixed(1)}</td><td>${durTxt(s.durMin)}</td><td><b>${hhmm(s.latest)}</b></td><td>${hhmm(s.end)}</td><td>${Math.round(s.slackMin)} min</td><td class="${ok?'st-ok':'st-bad'}">${ok?'A tiempo':'Tarde'}</td><td style="white-space:normal"><select class="emp" data-emp="${i}" style="min-width:190px;padding:5px">${empOptions()}</select><div class="sug" id="sug${i}"></div></td><td style="display:flex;gap:4px"><button data-print="${i}">Imprimir</button><button data-pdf="${i}">PDF</button><button data-wa="${i}" style="background:#25D366;border-color:#25D366;color:#fff">WhatsApp</button><button data-copy="${i}">Copiar</button></td></tr>`;});
   h+=`</tbody></table></div>`;
   sched.forEach((s,i)=>{
     h+=`<details class="route" id="det${i}"><summary><span class="dot" style="background:${s.color}"></span>Ruta ${s.num} · ${s.chica?'🛵 moto chica':'🏍️ moto grande'} · ${esc(s.zona)} · ${s.stops.length} paradas · ${durTxt(s.durMin)} · salir a más tardar ${hhmm(s.latest)}</summary><ol>`;
@@ -961,6 +1033,8 @@ function highlight(i){
 }
 
 // ===== Exportar =====
+const cargaTxt=s=>{const c=v=>v>100.5?'st-bad':v>90?'st-warn':'';return `<span class="${c(s.kgPct)}">${s.kg.toFixed(1)} kg</span> · <span class="${c(s.volPct)}">${Math.round(s.volPct)}% vol</span>`;};
+const cargaPlano=s=>s.kg!=null&&S.result&&S.result.cap?`Carga: ${s.kg.toFixed(1)} kg (${Math.round(s.kgPct)}%) · volumen ${Math.round(s.volPct)}%`:'';
 const pdfSafe=s=>String(s??'').normalize('NFC').replace(/[^\x20-\x7E\xA0-\xFF]/g,'');
 const durTxt=m=>{m=Math.round(m);return Math.floor(m/60)+' h '+String(m%60).padStart(2,'0')+' min';};
 function stopInfo(o,i,R){
@@ -968,7 +1042,7 @@ function stopInfo(o,i,R){
   const p0=ps[0]||{};
   const zona=[p0.city,p0.edo].filter(Boolean).join(', ')+(p0.cp?' · CP '+p0.cp:'');
   const tipos=u(ps.map(p=>p.tipo==='same_day'?'Mismo día':p.tipo==='next_day'?'Día siguiente':p.tipo?p.tipo.replace(/_/g,' '):''));
-  return{n:i+1,eta:hhmm(o.eta),same:ps.some(p=>p.tipo==='same_day'),ids:ps.map(p=>p.id),nombres:u(ps.map(p=>p.ref)).join(' | '),
+  return{revisar:ps.filter(p=>p.revisar).map(p=>p.id),n:i+1,eta:hhmm(o.eta),same:ps.some(p=>p.tipo==='same_day'),ids:ps.map(p=>p.id),nombres:u(ps.map(p=>p.ref)).join(' | '),
     calle:p0.calle||o.st.dir||`${o.st.lat.toFixed(5)}, ${o.st.lng.toFixed(5)}`,zona,dir:o.st.dir||`${o.st.lat.toFixed(5)}, ${o.st.lng.toFixed(5)}`,
     comp:u(ps.map(p=>p.comp)).join(' / '),tipo:tipos.join(' / '),coords:`${o.st.lat.toFixed(5)}, ${o.st.lng.toFixed(5)}`,
     tramo:`${Math.round(o.legMin)} min${o.legKm!=null?' · '+o.legKm.toFixed(1)+' km':''} desde ${i?'la parada '+i:'Lassaga 54'}`,espera:Math.round(o.svcMin)};
@@ -988,6 +1062,7 @@ function drawTicket(doc,R,cfg,draw){
   P((R.chica?'MOTO CHICA (sin autopistas ni carriles centrales)':'MOTO GRANDE')+' · '+R.zona,'bold',9.5);
   P(`Fecha: ${d}`,'bold',9);P(`Salida: ${hhmm(R.start)} de Lassaga 54 · salir a más tardar ${hhmm(R.latest)}`,'bold',9);
   P(`Paradas: ${R.stops.length}  Envíos: ${R.parcels}  ${R.km.toFixed(1)} km`,'bold',9);
+  if(cargaPlano(R))P(cargaPlano(R),'bold',9);
   const same=R.stops.filter(o=>o.st.parcels.some(p=>p.tipo==='same_day')).length;if(same)P(`Mismo día: ${same} parada(s)`,'bold',9);
   P(`Termina aprox: ${hhmm(R.end)}  (límite ${hhmm(R.deadline)})`,'bold',11,1);
   y+=1.5;rule(y,0.6);y+=0.5;
@@ -996,6 +1071,7 @@ function drawTicket(doc,R,cfg,draw){
     z=F('bold',15);y+=lh(z);T(String(s.n),M,y);F('bold',11);T(`~${s.eta}`,M+(s.n>=10?11:8)*k,y);
     if(s.same){F('bold',9);T('MISMO DIA',M+CW,y,{align:'right'});}
     P((s.ids.length>1?`Envíos (${s.ids.length}): `:'Envío: ')+s.ids.join(', '),'bold',9.5);
+    if(s.revisar.length)P('! REVISAR TAMANO: '+s.revisar.join(', '),'bold',9);
     if(s.nombres)P(s.nombres,'bold',9.5);
     P(s.calle,'normal',9.5);
     if(s.zona)P(s.zona,'bold',9.5);
@@ -1024,12 +1100,13 @@ function ticketHTML(R,cfg){
   const same=R.stops.filter(o=>o.st.parcels.some(p=>p.tipo==='same_day')).length;
   let h=`<section class="t"><div class="c b" style="font-size:${px(16)}">PACKATELAS</div><div class="c b" style="font-size:${px(14)}">RUTA ${R.num} de ${R.total}</div><div class="c b" style="font-size:${px(9)}">PRIORIDAD DE DESPACHO ${R.num}</div><div class="c b" style="font-size:${px(9)};border:1.5px solid #000;margin-top:2px">${R.chica?'MOTO CHICA · SIN AUTOPISTAS NI CARRILES CENTRALES':'MOTO GRANDE'}<br>${esc(R.zona||'')}</div>
   <div class="b" style="font-size:${px(11)};margin-top:4px">Repartidor: ${esc(R.repartidor||'____________________')}</div>
-  <div class="b">Fecha: ${esc(d)}<br>Salida: ${hhmm(R.start)} de Lassaga 54<br>Salir a más tardar: ${hhmm(R.latest)} · duración ${durTxt(R.durMin)}<br>Paradas: ${R.stops.length} · Envíos: ${R.parcels} · ${R.km.toFixed(1)} km${same?`<br>Mismo día: ${same} parada(s)`:''}</div>
+  <div class="b">Fecha: ${esc(d)}<br>Salida: ${hhmm(R.start)} de Lassaga 54<br>Salir a más tardar: ${hhmm(R.latest)} · duración ${durTxt(R.durMin)}<br>Paradas: ${R.stops.length} · Envíos: ${R.parcels} · ${R.km.toFixed(1)} km${cargaPlano(R)?'<br>'+cargaPlano(R):''}${same?`<br>Mismo día: ${same} parada(s)`:''}</div>
   <div class="b" style="font-size:${px(12)};margin-top:3px">Termina aprox: ${hhmm(R.end)} <span style="font-size:${px(9)}">(límite ${hhmm(R.deadline)})</span></div><hr class="thick">`;
   R.stops.forEach((o,i)=>{
     const s=stopInfo(o,i,R);
     h+=`<div class="s"><div class="row"><span><span class="b" style="font-size:${px(16)}">${s.n}</span> <span class="b" style="font-size:${px(12)}">~${s.eta}</span></span>${s.same?`<span class="tag">MISMO DÍA</span>`:''}</div>
       <div class="b">${s.ids.length>1?`Envíos (${s.ids.length}): `:'Envío: '}${esc(s.ids.join(', '))}</div>
+      ${s.revisar.length?`<div class="b" style="border:1.5px solid #000;padding:0 3px">⚠ REVISAR TAMAÑO: ${esc(s.revisar.join(', '))}</div>`:''}
       ${s.nombres?`<div class="b">${esc(s.nombres)}</div>`:''}
       <div>${esc(s.calle)}</div>${s.zona?`<div class="b">${esc(s.zona)}</div>`:''}
       ${s.comp?`<div class="b">Compromiso: ${esc(s.comp)}${s.tipo?' · '+esc(s.tipo):''}</div>`:''}
@@ -1057,10 +1134,10 @@ function printTickets(idxs){
 }
 function routeText(R){
   const e=empleadoDe(R.num);
-  let t=`*PACKATELAS · Ruta ${R.num} de ${R.total}*${e?' · '+e.nombre:''}\n${R.start.toLocaleDateString('es-MX',{weekday:'long',day:'2-digit',month:'short'})}\nPrioridad de despacho ${R.num} de ${R.total} · salir a más tardar ${hhmm(R.latest)}${R.chica?'\n🛵 Moto chica: sin autopistas ni carriles centrales':'\n🏍️ Moto grande'} · ${R.zona||''}\nSalida ${hhmm(R.start)} desde Lassaga 54 · termina aprox ${hhmm(R.end)}\n${R.stops.length} paradas · ${R.parcels} envíos · ${R.km.toFixed(1)} km\n`;
+  let t=`*PACKATELAS · Ruta ${R.num} de ${R.total}*${e?' · '+e.nombre:''}\n${R.start.toLocaleDateString('es-MX',{weekday:'long',day:'2-digit',month:'short'})}\nPrioridad de despacho ${R.num} de ${R.total} · salir a más tardar ${hhmm(R.latest)}${R.chica?'\n🛵 Moto chica: sin autopistas ni carriles centrales':'\n🏍️ Moto grande'} · ${R.zona||''}\nSalida ${hhmm(R.start)} desde Lassaga 54 · termina aprox ${hhmm(R.end)}\n${R.stops.length} paradas · ${R.parcels} envíos · ${R.km.toFixed(1)} km${cargaPlano(R)?'\n'+cargaPlano(R):''}\n`;
   R.stops.forEach((o,i)=>{
     const s=stopInfo(o,i,R);
-    t+=`\n*${s.n}. ~${s.eta}*${s.same?' · MISMO DÍA':''} · ${s.ids.join(', ')}\n${s.nombres?s.nombres+'\n':''}${s.calle}\n${s.zona?s.zona+'\n':''}${s.comp?'Compromiso: '+s.comp+'\n':''}${mapsURL(o.st)}\n`;
+    t+=`\n*${s.n}. ~${s.eta}*${s.same?' · MISMO DÍA':''} · ${s.ids.join(', ')}${s.revisar.length?' · ⚠ revisar tamaño':''}\n${s.nombres?s.nombres+'\n':''}${s.calle}\n${s.zona?s.zona+'\n':''}${s.comp?'Compromiso: '+s.comp+'\n':''}${mapsURL(o.st)}\n`;
   });
   return t;
 }
@@ -1214,7 +1291,7 @@ async function publicar(){
 function exportXLSX(){
   const R=S.result;const sched=currentSched();const rows=[];
   sched.forEach(s=>s.stops.forEach((o,k)=>o.st.parcels.forEach(p=>rows.push({Ruta:s.num,Repartidor:empleadoDe(s.num)?.nombre||'',Orden:k+1,Envio:p.id,Direccion:p.dir,Referencia:p.ref,Latitud:p.lat,Longitud:p.lng,Llegada:hhmm(o.eta),Sale:hhmm(o.leave),Espera_min:Math.round(o.svcMin)}))));
-  const res=sched.map(s=>({Prioridad:s.num,Moto:s.chica?'Chica':'Grande',Zona:s.zona,Duracion_min:Math.round(s.durMin),Salir_a_mas_tardar:hhmm(s.latest),Ruta:s.num,Paradas:s.stops.length,Envios:s.parcels,Km:+s.km.toFixed(1),Salida:hhmm(s.start),Termina:hhmm(s.end),Holgura_min:Math.round(s.slackMin)}));
+  const res=sched.map(s=>({Prioridad:s.num,Moto:s.chica?'Chica':'Grande',Zona:s.zona,Duracion_min:Math.round(s.durMin),Salir_a_mas_tardar:hhmm(s.latest),Ruta:s.num,Paradas:s.stops.length,Envios:s.parcels,Peso_kg:+(s.kg||0).toFixed(1),Volumen_pct:Math.round(s.volPct||0),Km:+s.km.toFixed(1),Salida:hhmm(s.start),Termina:hhmm(s.end),Holgura_min:Math.round(s.slackMin)}));
   const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'Paradas');XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(res),'Resumen');
   XLSX.writeFile(wb,`rutas_${R.cfg.date}.xlsx`);
 }
